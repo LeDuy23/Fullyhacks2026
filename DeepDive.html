@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>DeepDive — Explore the Deep</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
 <!-- Load config.js to set window.GOOGLE_MAPS_API_KEY before this tag -->
@@ -19,8 +19,22 @@
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body,#root{width:100%;height:100%;overflow:hidden}
-body{font-family:'Nunito',sans-serif;background:#04080f;}
+html{width:100%;height:100%}
+/* 100dvh tracks mobile browser chrome; min-height avoids blank strips when pinch-zooming the page */
+html,body,#root{
+  width:100%;
+  min-height:100%;
+  overflow:hidden;
+}
+@supports (height:100dvh){
+  html,body,#root{min-height:100dvh;height:100dvh;max-height:100dvh}
+}
+body{font-family:'Nunito',sans-serif;background:#04080f}
+/* Safe area inside #root so full-screen height matches the dynamic viewport, not notch + 100dvh overflow */
+#root{
+  box-sizing:border-box;
+  padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);
+}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:rgba(255,255,255,0.03)}
 ::-webkit-scrollbar-thumb{background:rgba(0,229,212,0.3);border-radius:99px}
@@ -918,10 +932,10 @@ function resolveUserPlaceGeocode(geo, place, onResult) {
   geocodeUserPlaceAddressChain(geo, place, onResult);
 }
 
-/** Larger zoom → slightly larger ping so it stays legible; clamped for world vs street view. */
+/** Gentle scale vs map zoom — small range avoids jarring size jumps while pinch-zooming. */
 function pingScaleForMapZoom(zoom) {
   const z = typeof zoom === 'number' && Number.isFinite(zoom) ? zoom : 14;
-  return Math.max(6, Math.min(20, Math.round(4 + z * 0.7)));
+  return Math.max(8, Math.min(16, Math.round(7 + z * 0.35)));
 }
 
 function strokeWeightForPingScale(scale) {
@@ -929,8 +943,8 @@ function strokeWeightForPingScale(scale) {
 }
 
 /**
- * Saved-spot ping: circle stays centered on the true lat/lng; icon rescales on zoom_changed.
- * optimized:false keeps vector symbol sizing predictable on high-DPI screens.
+ * Saved-spot ping: circle stays centered on the true lat/lng.
+ * Map zoom updates are debounced so rapid pinch in/out does not flicker or stutter the icon.
  */
 function createZoomAwareUserPingMarker({ map, position, title, fillColor, strokeColor }) {
   const latLng =
@@ -943,8 +957,12 @@ function createZoomAwareUserPingMarker({ map, position, title, fillColor, stroke
     title: title || '',
     optimized: false,
   });
+  let lastAppliedZoom = null;
   const applyIcon = () => {
-    const scale = pingScaleForMapZoom(map.getZoom());
+    const z = map.getZoom();
+    if (lastAppliedZoom === z) return;
+    lastAppliedZoom = z;
+    const scale = pingScaleForMapZoom(z);
     marker.setIcon({
       path: google.maps.SymbolPath.CIRCLE,
       scale,
@@ -955,12 +973,22 @@ function createZoomAwareUserPingMarker({ map, position, title, fillColor, stroke
     });
   };
   applyIcon();
-  const zoomListener = google.maps.event.addListener(map, 'zoom_changed', applyIcon);
+  let debounceT = null;
+  const scheduleApply = () => {
+    if (debounceT != null) clearTimeout(debounceT);
+    debounceT = setTimeout(() => {
+      debounceT = null;
+      lastAppliedZoom = null;
+      applyIcon();
+    }, 110);
+  };
+  const zoomListener = google.maps.event.addListener(map, 'zoom_changed', scheduleApply);
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
     google.maps.event.removeListener(zoomListener);
+    if (debounceT != null) clearTimeout(debounceT);
   };
   marker.__deepdivePingCleanup = cleanup;
   marker.addListener('map_changed', () => {
@@ -1460,9 +1488,27 @@ const ALL_DESTINATIONS = [
   {name:'San Francisco',country:'USA',flag:'🇺🇸'},{name:'Chicago',country:'USA',flag:'🇺🇸'},
 ];
 
+/** Build a planner-friendly destination string from spots in a user list. */
+function buildPlanDestFromUserList(list, spotsInList) {
+  if (!list) return '';
+  if (!spotsInList || spotsInList.length === 0) return list.name || '';
+  const names = spotsInList.map((s) => s.name).filter(Boolean);
+  const locs = spotsInList.map((s) => s.loc).filter(Boolean).sort((a, b) => b.length - a.length);
+  const locHint = locs[0] || '';
+  const placeLine = names.slice(0, 10).join(', ');
+  const core =
+    locHint.length > 2
+      ? locHint.split(',').map((x) => x.trim()).slice(-3).join(', ') || locHint
+      : names[0] || list.name;
+  return `${core}. From my list “${list.name}”: ${placeLine}${names.length > 10 ? '…' : ''}`;
+}
+
 /* ─── PLAN TRIP PANEL ─── */
-function PlanTripPanel({ onClose, onPlan, initialDest = '' }) {
+function PlanTripPanel({ onClose, onPlan, initialDest = '', userLists = [], savedSpots = [] }) {
   const [dest, setDest] = useState(initialDest);
+  const [showListImport, setShowListImport] = useState(false);
+  /** Set when destination was filled from a list — shown on the Import card so the user always sees the source. */
+  const [planImportSource, setPlanImportSource] = useState(null);
   const skipPredRef = useRef(false);
   const [predictions, setPredictions] = useState([]);
   const [popularRows, setPopularRows] = useState(null);
@@ -1601,7 +1647,7 @@ function PlanTripPanel({ onClose, onPlan, initialDest = '' }) {
       <div style={{flex:1,overflowY:'auto',padding:'20px'}}>
         <div style={{position:'relative',marginBottom:12,zIndex:5}}>
           <div style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',fontSize:18}}>🔍</div>
-          <input data-testid="plan-destination-input" value={dest} onChange={(e)=>{ skipPredRef.current=false; setDest(e.target.value); }}
+          <input data-testid="plan-destination-input" value={dest} onChange={(e)=>{ skipPredRef.current=false; setPlanImportSource(null); setDest(e.target.value); }}
             placeholder="Search cities & places (Google)…"
             style={{width:'100%',padding:'14px 14px 14px 44px',borderRadius:14,
               background:'rgba(255,255,255,0.07)',border:`1.5px solid ${C.glassBd}`,
@@ -1626,15 +1672,149 @@ function PlanTripPanel({ onClose, onPlan, initialDest = '' }) {
             </div>
           )}
         </div>
-        <div style={{padding:'14px 16px',borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`,
-          display:'flex',alignItems:'center',gap:12,marginBottom:20,cursor:'pointer'}}>
+        <button
+          type="button"
+          data-testid="plan-import-from-lists"
+          onClick={() => {
+            if (!userLists || userLists.length === 0) return;
+            setShowListImport(true);
+          }}
+          disabled={!userLists || userLists.length === 0}
+          style={{
+            width:'100%',textAlign:'left',padding:'14px 16px',borderRadius:14,background:C.glass,
+            border:`1px solid ${C.glassBd}`,display:'flex',alignItems:'center',gap:12,marginBottom:20,
+            cursor:!userLists || userLists.length === 0 ? 'not-allowed' : 'pointer',
+            opacity:!userLists || userLists.length === 0 ? 0.5 : 1,
+            fontFamily:'inherit',
+          }}
+        >
           <PearlPuffer size={44}/>
-          <div>
+          <div style={{flex:1,minWidth:0}}>
             <div style={{color:'white',fontWeight:800,fontSize:14}}>Import from my Lists</div>
-            <div style={{color:C.textSec,fontSize:12}}>Pull spots from your saved lists</div>
+            {planImportSource ? (
+              <div style={{marginTop:4}}>
+                <div style={{color:C.biolume,fontSize:12,fontWeight:800,lineHeight:1.35}}>
+                  <span aria-hidden="true">{planImportSource.icon}</span>{' '}
+                  {planImportSource.name}
+                  <span style={{color:C.textSec,fontWeight:600}}>
+                    {' '}· {planImportSource.count} spot{planImportSource.count === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div style={{color:C.textMut,fontSize:11,marginTop:2}}>Destination uses this list — tap to pick another</div>
+              </div>
+            ) : (
+              <div style={{color:C.textSec,fontSize:12}}>
+                {!userLists || userLists.length === 0
+                  ? 'Create a list in Spots first'
+                  : 'Tap to see your lists and choose which one to import'}
+              </div>
+            )}
           </div>
-          <div style={{marginLeft:'auto',color:C.biolume,fontSize:18}}>›</div>
-        </div>
+          <div style={{marginLeft:'auto',color:C.biolume,fontSize:18,flexShrink:0}}>›</div>
+        </button>
+        {showListImport && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose a list to import"
+            onClick={() => setShowListImport(false)}
+            style={{
+              position:'fixed',inset:0,background:'rgba(4,8,15,0.72)',backdropFilter:'blur(6px)',
+              zIndex:6000,display:'flex',alignItems:'flex-end',justifyContent:'center',padding:0,
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width:'100%',maxWidth:520,maxHeight:'72vh',overflowY:'auto',
+                background:`linear-gradient(180deg,${C.navy},${C.deep})`,
+                borderRadius:'20px 20px 0 0',
+                border:`1px solid ${C.glassBd}`,borderBottom:'none',
+                padding:'20px 18px 28px',boxShadow:'0 -12px 40px rgba(0,0,0,0.45)',
+              }}
+            >
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+                <div style={{color:'white',fontWeight:900,fontSize:17}}>Which list to import?</div>
+                <button
+                  type="button"
+                  onClick={() => setShowListImport(false)}
+                  style={{
+                    width:36,height:36,borderRadius:'50%',background:C.glass,border:`1px solid ${C.glassBd}`,
+                    color:C.textSec,fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+              <p style={{color:C.textSec,fontSize:12,marginBottom:14,lineHeight:1.45}}>
+                Each row shows list name and a preview of places. Pick one — we fill the destination field from those spots.
+              </p>
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {userLists.map((l) => {
+                  const spots = (savedSpots || []).filter((s) => s.listId === l.id);
+                  const count = spots.length;
+                  const previewNames = spots
+                    .map((s) => (s.name || '').trim())
+                    .filter(Boolean)
+                    .slice(0, 4);
+                  const previewLine = previewNames.length
+                    ? previewNames.join(' · ') + (count > previewNames.length ? ' · …' : '')
+                    : null;
+                  return (
+                    <button
+                      key={l.id}
+                      type="button"
+                      data-testid={`plan-import-list-${l.id}`}
+                      onClick={() => {
+                        if (spots.length === 0) {
+                          setErr('This list has no spots yet. Add places in Spots first.');
+                          setShowListImport(false);
+                          return;
+                        }
+                        skipPredRef.current = true;
+                        setPredictions([]);
+                        setDest(buildPlanDestFromUserList(l, spots));
+                        setPlanImportSource({
+                          id: l.id,
+                          name: l.name,
+                          icon: l.icon || '📋',
+                          count: spots.length,
+                        });
+                        setErr('');
+                        setShowListImport(false);
+                      }}
+                      style={{
+                        display:'flex',alignItems:'flex-start',gap:12,padding:'14px 16px',borderRadius:14,
+                        background: planImportSource?.id === l.id ? 'rgba(0,229,212,0.1)' : C.glass,
+                        border:`1px solid ${planImportSource?.id === l.id ? C.biolume : C.glassBd}`,
+                        cursor:'pointer',
+                        textAlign:'left',fontFamily:'inherit',color:'white',
+                        opacity: count === 0 ? 0.55 : 1,
+                      }}
+                    >
+                      <span style={{fontSize:22,lineHeight:1.2}} aria-hidden="true">{l.icon || '📋'}</span>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontWeight:800,fontSize:15}}>{l.name}</div>
+                        <div style={{color:C.textSec,fontSize:12,marginTop:2}}>
+                          {count === 0 ? 'No spots yet — add some in Spots' : `${count} spot${count === 1 ? '' : 's'}`}
+                        </div>
+                        {previewLine ? (
+                          <div style={{
+                            color:C.textMut,fontSize:11,marginTop:8,lineHeight:1.45,
+                            borderTop:`1px solid ${C.glassBd}`,paddingTop:8,
+                          }}>
+                            {previewLine}
+                          </div>
+                        ) : null}
+                      </div>
+                      <span style={{color:C.biolume,fontSize:16,flexShrink:0,marginTop:2}}>→</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
         {dest.trim().length>=2 ? (
           <>
             <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>
@@ -2307,12 +2487,12 @@ function AddSpotsSheet({
   const [extractJson, setExtractJson] = useState(null);
   const [extractMeta, setExtractMeta] = useState(null);
   const [showImportReview, setShowImportReview] = useState(false);
-  const reviewLight = showImportReview && importUiTheme === 'light';
-  const sourceReviewDark = showImportReview && !reviewLight;
+  /** Header moon/sun applies to all Add spots → extract screens (paste, results, review). */
+  const reviewLight = importUiTheme === 'light';
+  const sourceReviewDark = importUiTheme === 'dark';
   const [listPickByIdx, setListPickByIdx] = useState({});
   const [addedPlaces, setAddedPlaces] = useState({});
   const [selectedPlaceKeys, setSelectedPlaceKeys] = useState({});
-  const [bulkListId, setBulkListId] = useState('');
   const [newListName, setNewListName] = useState('');
   /** How user opened analyze: notes = list paste only (no social URL blurb). */
   const [extractEntry, setExtractEntry] = useState('links');
@@ -2327,7 +2507,6 @@ function AddSpotsSheet({
     setListPickByIdx({});
     setAddedPlaces({});
     setSelectedPlaceKeys({});
-    setBulkListId('');
     setNewListName('');
     setExtractEntry('links');
   };
@@ -2490,16 +2669,13 @@ function AddSpotsSheet({
     google_place_id: place.google_place_id,
     formatted_address: place.formatted_address,
   });
-  /** Per-row list override, else bulk list chosen for this import. */
+  /** Per-row list override, else first saved list. */
   const effectiveListIdForRow = (idx) => {
     const row = listPickByIdx[idx];
     if (row !== undefined && row !== '') return row;
-    return bulkListId || '';
+    return userLists[0]?.id || '';
   };
-  const pickListForImport = (listId) => {
-    setBulkListId(listId);
-    setListPickByIdx({});
-  };
+  const defaultImportListId = userLists[0]?.id || '';
   const sourceThumb =
     extractMeta?.source?.thumbnail_url ||
     (extractImage && extractImage.preview) ||
@@ -2576,7 +2752,6 @@ function AddSpotsSheet({
         onAddPlaceToMap(payload);
       });
       bumpAddedForSelected('both');
-      setBulkListId(id);
       setNewListName('');
       clearExtractAfterSave();
     }
@@ -2667,22 +2842,22 @@ function AddSpotsSheet({
         </div>
         {!showImportReview ? (
           <>
-        <h3 style={{color:'white',fontSize:18,fontWeight:900,marginBottom:8}}>
+        <h3 style={{color: reviewLight ? '#111827' : 'white',fontSize:18,fontWeight:900,marginBottom:8}}>
           {extractEntry === 'notes' ? 'Paste your list' : 'Analyze text or image'}
         </h3>
         {extractEntry === 'notes' ? (
-          <p style={{color:C.textSec,fontSize:13,marginBottom:12,lineHeight:1.5}}>
-            Paste your list, bullets, or any notes about places you want to save. The AI reads plain text here—no TikTok or Instagram link required. When you’re done, use <strong style={{color:'white'}}>Run AI extract</strong> to pull out spots for your lists and map.
+          <p style={{color: reviewLight ? '#4b5563' : C.textSec,fontSize:13,marginBottom:12,lineHeight:1.5}}>
+            Paste your list, bullets, or any notes about places you want to save. The AI reads plain text here—no TikTok or Instagram link required. When you’re done, use <strong style={{color: reviewLight ? '#111827' : 'white'}}>Run AI extract</strong> to pull out spots for your lists and map.
           </p>
         ) : extractEntry === 'screenshots' ? (
-          <p style={{color:C.textSec,fontSize:13,marginBottom:12,lineHeight:1.5}}>
-            Use <strong style={{color:'white'}}>Choose image</strong> to pick a <strong style={{color:'white'}}>PNG, JPEG, or WebP</strong> from Files, or add optional notes below. Images are sent to Gemini vision for place cues.
+          <p style={{color: reviewLight ? '#4b5563' : C.textSec,fontSize:13,marginBottom:12,lineHeight:1.5}}>
+            Use <strong style={{color: reviewLight ? '#111827' : 'white'}}>Choose image</strong> to pick a <strong style={{color: reviewLight ? '#111827' : 'white'}}>PNG, JPEG, or WebP</strong> from Files, or add optional notes below. Images are sent to Gemini vision for place cues.
           </p>
         ) : (
-          <p style={{color:C.textSec,fontSize:13,marginBottom:12,lineHeight:1.5}}>
+          <p style={{color: reviewLight ? '#4b5563' : C.textSec,fontSize:13,marginBottom:12,lineHeight:1.5}}>
             Paste a TikTok or Instagram reel URL, or a Google Maps link — the server runs the{' '}
-            <strong style={{color:'white'}}>reel-to-map</strong> job (download + Gemini video + Places when configured), which can take up to a couple of minutes. Or use{' '}
-            <strong style={{color:'white'}}>Choose image</strong> for a <strong style={{color:'white'}}>PNG, JPEG, or WebP</strong> for instant vision extract. Plain notes without a social/Maps URL still use the fast <code style={{color:C.biolume,fontSize:11}}>/extract</code> path.
+            <strong style={{color: reviewLight ? '#111827' : 'white'}}>reel-to-map</strong> job (download + Gemini video + Places when configured), which can take up to a couple of minutes. Or use{' '}
+            <strong style={{color: reviewLight ? '#111827' : 'white'}}>Choose image</strong> for a <strong style={{color: reviewLight ? '#111827' : 'white'}}>PNG, JPEG, or WebP</strong> for instant vision extract. Plain notes without a social/Maps URL still use the fast <code style={{color: reviewLight ? '#0d9488' : C.biolume,fontSize:11}}>/extract</code> path.
           </p>
         )}
         <div style={{display:'flex',flexWrap:'wrap',gap:10,marginBottom:12}}>
@@ -2692,27 +2867,35 @@ function AddSpotsSheet({
             onClick={() => extractFileInputRef.current && extractFileInputRef.current.click()}
             style={{
               padding:'10px 14px',borderRadius:12,fontWeight:800,fontSize:13,
-              background:'rgba(96,165,250,0.2)',border:'1px solid rgba(96,165,250,0.5)',color:'#bfdbfe',
+              background: reviewLight ? 'rgba(37,99,235,0.12)' : 'rgba(96,165,250,0.2)',
+              border: reviewLight ? '1px solid rgba(37,99,235,0.35)' : '1px solid rgba(96,165,250,0.5)',
+              color: reviewLight ? '#1d4ed8' : '#bfdbfe',
               cursor:'pointer',
             }}
           >Choose image (PNG / JPEG / WebP)</button>
           {extractImage ? (
             <button type="button" onClick={()=>setExtractImage(null)}
-              style={{padding:'10px 14px',borderRadius:12,fontWeight:700,fontSize:12,background:C.glass,
-                border:`1px solid ${C.glassBd}`,color:C.textSec,cursor:'pointer'}}>Remove image</button>
+              style={{padding:'10px 14px',borderRadius:12,fontWeight:700,fontSize:12,
+                background: reviewLight ? '#ffffff' : C.glass,
+                border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                color: reviewLight ? '#6b7280' : C.textSec,cursor:'pointer'}}>Remove image</button>
           ) : null}
         </div>
         {extractImage ? (
-          <div style={{marginBottom:12,padding:12,borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
-            <div style={{fontSize:11,color:C.biolume,fontWeight:800,marginBottom:8}}>Image preview</div>
+          <div style={{marginBottom:12,padding:12,borderRadius:14,
+            background: reviewLight ? '#ffffff' : C.glass,
+            border: reviewLight ? '1px solid rgba(17,24,39,0.1)' : `1px solid ${C.glassBd}`}}>
+            <div style={{fontSize:11,color: reviewLight ? '#0d9488' : C.biolume,fontWeight:800,marginBottom:8}}>Image preview</div>
             <img src={extractImage.preview} alt="" style={{maxWidth:'100%',maxHeight:180,borderRadius:10,objectFit:'contain'}} />
-            <div style={{fontSize:10,color:C.textMut,marginTop:6}}>{extractImage.name}</div>
+            <div style={{fontSize:10,color: reviewLight ? '#9ca3af' : C.textMut,marginTop:6}}>{extractImage.name}</div>
           </div>
         ) : null}
         <textarea data-testid="addspots-extract-input" value={extractText} onChange={(e)=>setExtractText(e.target.value)}
           placeholder={extractEntry === 'notes' ? 'e.g. • Manta Point\n• Crystal Bay\n• Cafés in Canggu…' : 'e.g. Best reefs in Raja Ampat for macro…'}
-          style={{width:'100%',minHeight:120,padding:14,borderRadius:14,background:'rgba(255,255,255,0.07)',
-            border:`1px solid ${C.glassBd}`,color:'white',fontSize:14,resize:'vertical',boxSizing:'border-box',fontFamily:'inherit'}}/>
+          style={{width:'100%',minHeight:120,padding:14,borderRadius:14,
+            background: reviewLight ? '#ffffff' : 'rgba(255,255,255,0.07)',
+            border: reviewLight ? '1px solid rgba(17,24,39,0.15)' : `1px solid ${C.glassBd}`,
+            color: reviewLight ? '#111827' : 'white',fontSize:14,resize:'vertical',boxSizing:'border-box',fontFamily:'inherit'}}/>
         <button type="button" data-testid="addspots-extract-submit" disabled={extractLoading} onClick={runExtract}
           style={{marginTop:14,width:'100%',padding:14,borderRadius:14,fontWeight:800,
             background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,border:'none',
@@ -2739,7 +2922,7 @@ function AddSpotsSheet({
         {extractJson && (
           <div data-testid="addspots-extract-result" style={{marginTop:14}}>
             {!showImportReview ? (
-              <ExtractInsightsSummary row={extractJson?.results?.[0]} />
+              <ExtractInsightsSummary row={extractJson?.results?.[0]} variant={reviewLight ? 'light' : 'dark'} />
             ) : (
               <details style={{marginBottom:12}}>
                 <summary style={{color: reviewLight ? '#6b7280' : C.textSec,fontSize:12,cursor:'pointer',fontWeight:700}}>AI details</summary>
@@ -2855,75 +3038,6 @@ function AddSpotsSheet({
                     {selectedPlaces.length === extractPlacesInfo.places.length ? 'Unselect all' : 'Select all'}
                   </button>
                 </div>
-                {userLists.length > 0 ? (
-                  <div style={{marginBottom:12}}>
-                    <div style={{
-                      color: reviewLight ? '#111827' : 'white',
-                      fontSize:12,
-                      fontWeight:900,
-                      marginBottom:8,
-                      letterSpacing:0.2,
-                    }}>
-                      Your lists — tap one to use for this import
-                    </div>
-                    <div
-                      role="listbox"
-                      aria-label="Choose list for imported spots"
-                      style={{display:'flex',flexWrap:'wrap',gap:8}}
-                    >
-                      {userLists.map((l) => {
-                        const on = bulkListId === l.id;
-                        return (
-                          <button
-                            key={l.id}
-                            type="button"
-                            data-testid={l.id === userLists[0]?.id ? 'addspots-import-list-chip' : undefined}
-                            onClick={() => pickListForImport(l.id)}
-                            style={{
-                              display:'inline-flex',
-                              alignItems:'center',
-                              gap:8,
-                              padding:'10px 14px',
-                              borderRadius:14,
-                              cursor:'pointer',
-                              fontFamily:'inherit',
-                              fontWeight:800,
-                              fontSize:13,
-                              border: on
-                                ? `2px solid ${C.biolume}`
-                                : (reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`),
-                              background: on
-                                ? (reviewLight ? 'rgba(0,229,212,0.18)' : 'rgba(0,229,212,0.2)')
-                                : (reviewLight ? '#f9fafb' : 'rgba(255,255,255,0.06)'),
-                              color: reviewLight ? '#111827' : 'white',
-                              boxShadow: on && reviewLight ? '0 4px 14px rgba(0,229,212,0.25)' : 'none',
-                            }}
-                          >
-                            <span style={{fontSize:18,lineHeight:1}} aria-hidden="true">{l.icon || '📋'}</span>
-                            <span style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {!bulkListId ? (
-                      <div style={{marginTop:6,color: reviewLight ? '#9ca3af' : C.textMut,fontSize:11,fontWeight:600}}>
-                        Pick a list for row actions and for &quot;Add to List&quot; / &quot;Map + list&quot; below.
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div style={{
-                    marginBottom:12,
-                    padding:12,
-                    borderRadius:12,
-                    background: reviewLight ? '#fef3c7' : 'rgba(251,191,36,0.12)',
-                    color: reviewLight ? '#92400e' : '#fcd34d',
-                    fontSize:12,
-                    fontWeight:700,
-                  }}>
-                    No lists yet. Create one from the <strong>+</strong> menu, or use <strong>New List + Save</strong> at the bottom.
-                  </div>
-                )}
                 <div style={{
                   display:'flex',flexDirection:'column',gap:10,
                   maxHeight: showImportReview ? 360 : 280,
@@ -3033,7 +3147,7 @@ function AddSpotsSheet({
                               <option value="">Create a list first</option>
                             ) : (
                               <>
-                                <option value="">Use list picked above</option>
+                                <option value="">Default (first list)</option>
                                 {userLists.map((l) => (
                                   <option key={l.id} value={l.id}>{`${l.icon ? `${l.icon} ` : ''}${l.name}`}</option>
                                 ))}
@@ -3114,8 +3228,8 @@ function AddSpotsSheet({
                     Selected: <span style={{color: reviewLight ? '#111827' : 'white',fontWeight:900}}>{selectedPlaces.length}</span> spot(s)
                   </div>
                   <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
-                    <button type="button" onClick={()=>saveSelectedToList(bulkListId)}
-                      disabled={selectedPlaces.length===0 || userLists.length===0 || !bulkListId}
+                    <button type="button" onClick={()=>saveSelectedToList(defaultImportListId)}
+                      disabled={selectedPlaces.length===0 || userLists.length===0 || !defaultImportListId}
                       style={{
                         flex: showImportReview ? '1 1 140px' : '0 1 auto',
                         padding:'12px 14px',borderRadius:14,
@@ -3123,8 +3237,8 @@ function AddSpotsSheet({
                         background: reviewLight ? '#f3f4f6' : C.glass,
                         color: reviewLight ? '#111827' : 'white',
                         fontWeight:900,fontSize:13,
-                        cursor:selectedPlaces.length&&userLists.length&&bulkListId?'pointer':'not-allowed',
-                        opacity:selectedPlaces.length&&userLists.length&&bulkListId?1:0.45,
+                        cursor:selectedPlaces.length&&userLists.length&&defaultImportListId?'pointer':'not-allowed',
+                        opacity:selectedPlaces.length&&userLists.length&&defaultImportListId?1:0.45,
                         display:'flex',alignItems:'center',justifyContent:'center',gap:8,
                       }}>
                       <span aria-hidden="true">☰</span>
@@ -3148,8 +3262,8 @@ function AddSpotsSheet({
                     <button
                       type="button"
                       data-testid="addspots-bulk-map-and-list"
-                      onClick={() => saveSelectedMapAndList(bulkListId)}
-                      disabled={selectedPlaces.length===0 || userLists.length===0 || !bulkListId}
+                      onClick={() => saveSelectedMapAndList(defaultImportListId)}
+                      disabled={selectedPlaces.length===0 || userLists.length===0 || !defaultImportListId}
                       style={{
                         flex: showImportReview ? '1 1 200px' : '0 1 auto',
                         padding:'12px 14px',borderRadius:14,
@@ -3157,8 +3271,8 @@ function AddSpotsSheet({
                         background:'rgba(0,229,212,0.12)',
                         color: reviewLight ? '#0f766e' : C.biolumeB,
                         fontWeight:900,fontSize:13,
-                        cursor:selectedPlaces.length&&userLists.length&&bulkListId?'pointer':'not-allowed',
-                        opacity:selectedPlaces.length&&userLists.length&&bulkListId?1:0.45,
+                        cursor:selectedPlaces.length&&userLists.length&&defaultImportListId?'pointer':'not-allowed',
+                        opacity:selectedPlaces.length&&userLists.length&&defaultImportListId?1:0.45,
                         display:'flex',alignItems:'center',justifyContent:'center',gap:8,
                       }}
                     >
@@ -3864,14 +3978,20 @@ function ListDetailView({ list, savedSpots, onBack, onAddSpots }) {
 }
 
 /* ─── SPOTS TAB ─── */
-function SpotsTab({ onAddSpots, savedSpots, userLists, onNearbyMapSync = () => {} }) {
+function SpotsTab({
+  onAddSpots,
+  savedSpots,
+  userLists,
+  onNearbyMapSync = () => {},
+  listFocusId,
+  onListFocusIdChange,
+}) {
   const [filter, setFilter] = useState('All');
-  const [listFocusId, setListFocusId] = useState(null);
   const [userLoc, setUserLoc] = useState(null);
 
   useEffect(() => {
-    if (listFocusId && !(userLists || []).some((l) => l.id === listFocusId)) setListFocusId(null);
-  }, [userLists, listFocusId]);
+    if (listFocusId && !(userLists || []).some((l) => l.id === listFocusId)) onListFocusIdChange(null);
+  }, [userLists, listFocusId, onListFocusIdChange]);
   const [geoState, setGeoState] = useState('idle');
   const [nearbyDiscover, setNearbyDiscover] = useState({ food: [], fun: [] });
   const [nearbyDiscoverLoading, setNearbyDiscoverLoading] = useState(false);
@@ -3970,11 +4090,8 @@ function SpotsTab({ onAddSpots, savedSpots, userLists, onNearbyMapSync = () => {
       <ListDetailView
         list={focusedList}
         savedSpots={savedSpots}
-        onBack={() => setListFocusId(null)}
-        onAddSpots={() => {
-          setListFocusId(null);
-          onAddSpots();
-        }}
+        onBack={() => onListFocusIdChange(null)}
+        onAddSpots={onAddSpots}
       />
     );
   }
@@ -4004,11 +4121,11 @@ function SpotsTab({ onAddSpots, savedSpots, userLists, onNearbyMapSync = () => {
               role="button"
               tabIndex={0}
               data-testid={li === 0 ? 'spots-list-row' : undefined}
-              onClick={() => setListFocusId(l.id)}
+              onClick={() => onListFocusIdChange(l.id)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  setListFocusId(l.id);
+                  onListFocusIdChange(l.id);
                 }
               }}
               style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
@@ -4225,6 +4342,8 @@ function ProfileMenuMini({ onClose, onSignOut }) {
 function MainApp({ onSignOut }) {
   const [tab, setTab] = useState('trips');
   const [panel, setPanel] = useState(null);
+  /** Persists while Add Spots panel is open so we return to the same list instead of the lists root. */
+  const [spotsListFocusId, setSpotsListFocusId] = useState(null);
   const [newListModalKey, setNewListModalKey] = useState(0);
   const [actionOpen, setActionOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -4670,7 +4789,10 @@ function MainApp({ onSignOut }) {
       setNewListModalKey((k) => k + 1);
       setPanel('newlist');
     }
-    if (id === 'spots') setPanel('addspots');
+    if (id === 'spots') {
+      setSpotsListFocusId(null);
+      setPanel('addspots');
+    }
   };
 
   const handlePlanFromPanel = async (ctx) => {
@@ -4836,7 +4958,8 @@ function MainApp({ onSignOut }) {
             type="button"
             data-testid="header-import-theme-toggle"
             title={importUiTheme === 'dark' ? 'Import screen: dark (tap for light cards)' : 'Import screen: light (tap for dark)'}
-            aria-pressed={importUiTheme === 'dark'}
+            aria-label="Toggle import add-spots theme"
+            aria-pressed={importUiTheme === 'light'}
             onClick={() => setImportUiTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
             style={{
               width:36,height:36,borderRadius:12,
@@ -5046,6 +5169,8 @@ function MainApp({ onSignOut }) {
                   savedSpots={savedSpots}
                   userLists={userLists}
                   onNearbyMapSync={syncNearbyMap}
+                  listFocusId={spotsListFocusId}
+                  onListFocusIdChange={setSpotsListFocusId}
                 />
               )}
             </div>
@@ -5054,6 +5179,8 @@ function MainApp({ onSignOut }) {
             <PlanTripPanel
               key={planSessionId}
               initialDest={planPrefill}
+              userLists={userLists}
+              savedSpots={savedSpots}
               onClose={() => { setPanel(null); setPlanPrefill(''); }}
               onPlan={handlePlanFromPanel}
             />
