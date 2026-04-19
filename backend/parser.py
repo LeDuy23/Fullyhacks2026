@@ -5,13 +5,15 @@ Accepts Instagram post/reel URLs, scrapes the page for captions and metadata,
 and returns NormalizedPost-compatible dicts ready for the AI extraction pipeline.
 
 Scraping strategy (in priority order):
-1. Fetch the public oembed endpoint (no auth needed, gives title/author).
-2. Fetch the HTML page and pull JSON-LD or <meta> og:description tags for
+1. RapidAPI Real-Time Instagram Scraper (best data, requires subscription).
+2. Fetch the public oembed endpoint (no auth needed, gives title/author).
+3. Fetch the HTML page and pull JSON-LD or <meta> og:description tags for
    the caption, thumbnail, and creator name.
-3. Fall back gracefully — if nothing is parseable, return a skeleton with
+4. Fall back gracefully — if nothing is parseable, return a skeleton with
    the URL so downstream extraction can still flag it as low-confidence.
 """
 
+import os
 import re
 import json
 import uuid
@@ -46,6 +48,10 @@ HEADERS = {
 
 OEMBED_URL = "https://api.instagram.com/oembed"
 REQUEST_TIMEOUT = 15
+
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
+RAPIDAPI_HOST = os.environ.get("RAPIDAPI_HOST", "real-time-instagram-scraper-api1.p.rapidapi.com")
+RAPIDAPI_MEDIA_URL = f"https://{RAPIDAPI_HOST}/v1/media_info"
 
 
 # ---- Data classes -----------------------------------------------------------
@@ -107,6 +113,65 @@ def extract_shortcode(url: str) -> Optional[str]:
 
 
 # ---- Instagram scraping -----------------------------------------------------
+
+def _fetch_rapidapi(shortcode: str) -> dict:
+    """
+    Hit the RapidAPI Real-Time Instagram Scraper /v1/media_info endpoint.
+
+    Response shape:
+        { "data": { "items": [ { "caption": { "text": "..." }, "user": { ... }, ... } ] } }
+
+    Returns a dict with caption / creator / thumbnail_url keys,
+    or an empty dict on any failure (missing key, network error, etc.).
+    """
+    if not RAPIDAPI_KEY:
+        return {}
+
+    try:
+        resp = requests.get(
+            RAPIDAPI_MEDIA_URL,
+            params={"code_or_id_or_url": shortcode},
+            headers={
+                "x-rapidapi-key": RAPIDAPI_KEY,
+                "x-rapidapi-host": RAPIDAPI_HOST,
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.debug("RapidAPI failed for %s: %s", shortcode, exc)
+        return {}
+
+    items = data.get("data", {}).get("items")
+    if not items:
+        return {}
+    item = items[0]
+
+    result: dict = {}
+
+    caption_obj = item.get("caption")
+    if isinstance(caption_obj, dict):
+        result["caption"] = caption_obj.get("text", "")
+    elif isinstance(caption_obj, str):
+        result["caption"] = caption_obj
+    else:
+        result["caption"] = ""
+
+    user = item.get("user") or item.get("owner") or {}
+    if isinstance(user, dict):
+        result["creator"] = user.get("username", "") or user.get("full_name", "")
+    else:
+        result["creator"] = ""
+
+    result["thumbnail_url"] = (
+        item.get("thumbnail_url")
+        or item.get("display_url")
+        or item.get("image_versions2", {}).get("candidates", [{}])[0].get("url", "")
+    )
+
+    return result
+
 
 def _fetch_oembed(url: str) -> dict:
     """Use Instagram's public oembed endpoint (no API key required)."""
@@ -173,20 +238,34 @@ def _fetch_html_meta(url: str) -> dict:
 
 
 def scrape_instagram(url: str) -> ParsedPost:
-    """Scrape a single Instagram post URL and return a ParsedPost."""
+    """
+    Scrape a single Instagram post URL and return a ParsedPost.
+
+    Priority: RapidAPI -> oembed -> HTML meta -> empty skeleton.
+    """
     post = ParsedPost(url=url, platform="instagram")
-    post.post_id = extract_shortcode(url) or post.post_id
+    shortcode = extract_shortcode(url)
+    post.post_id = shortcode or post.post_id
 
-    oembed = _fetch_oembed(url)
-    if oembed:
-        post.caption = oembed.get("title", "")
-        post.creator = oembed.get("author_name", "")
-        post.thumbnail_url = oembed.get("thumbnail_url", "")
+    if shortcode:
+        rapid = _fetch_rapidapi(shortcode)
+        if rapid:
+            post.caption = rapid.get("caption", "")
+            post.creator = rapid.get("creator", "")
+            post.thumbnail_url = rapid.get("thumbnail_url", "")
 
-    meta = _fetch_html_meta(url)
-    post.caption = post.caption or meta.get("caption", "")
-    post.creator = post.creator or meta.get("creator", "")
-    post.thumbnail_url = post.thumbnail_url or meta.get("thumbnail_url", "")
+    if not post.caption:
+        oembed = _fetch_oembed(url)
+        if oembed:
+            post.caption = post.caption or oembed.get("title", "")
+            post.creator = post.creator or oembed.get("author_name", "")
+            post.thumbnail_url = post.thumbnail_url or oembed.get("thumbnail_url", "")
+
+    if not post.caption:
+        meta = _fetch_html_meta(url)
+        post.caption = post.caption or meta.get("caption", "")
+        post.creator = post.creator or meta.get("creator", "")
+        post.thumbnail_url = post.thumbnail_url or meta.get("thumbnail_url", "")
 
     post.raw_text = _build_raw_text(post)
     return post

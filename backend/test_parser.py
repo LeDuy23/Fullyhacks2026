@@ -19,6 +19,7 @@ from parser import (
     detect_platform,
     validate_url,
     extract_shortcode,
+    _fetch_rapidapi,
     _fetch_html_meta,
     _fetch_oembed,
     _build_raw_text,
@@ -203,22 +204,156 @@ class TestFetchOembed:
 
 
 # ---------------------------------------------------------------------------
+# RapidAPI (mocked)
+# ---------------------------------------------------------------------------
+
+RAPIDAPI_RESPONSE_FULL = {
+    "data": {
+        "items": [{
+            "caption": {"text": "Best hidden café in Kyoto #japan #travel"},
+            "user": {"username": "kyoto_foodie", "full_name": "Kyoto Foodie"},
+            "thumbnail_url": "https://img.example.com/rapid_thumb.jpg",
+        }]
+    }
+}
+
+RAPIDAPI_RESPONSE_STRING_CAPTION = {
+    "data": {
+        "items": [{
+            "caption": "Street food in Bangkok",
+            "user": {"username": "bkk_eats"},
+            "display_url": "https://img.example.com/bkk.jpg",
+        }]
+    }
+}
+
+RAPIDAPI_RESPONSE_NO_CAPTION = {
+    "data": {
+        "items": [{
+            "user": {"username": "silent_poster"},
+        }]
+    }
+}
+
+RAPIDAPI_RESPONSE_EMPTY_ITEMS = {
+    "data": {
+        "items": []
+    }
+}
+
+
+class TestFetchRapidapi:
+    @patch("parser.RAPIDAPI_KEY", "test-key")
+    @patch("parser.requests.get")
+    def test_extracts_caption_from_dict(self, mock_get):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = RAPIDAPI_RESPONSE_FULL
+        mock_get.return_value = resp
+
+        result = _fetch_rapidapi("ABC123")
+
+        assert result["caption"] == "Best hidden café in Kyoto #japan #travel"
+        assert result["creator"] == "kyoto_foodie"
+        assert result["thumbnail_url"] == "https://img.example.com/rapid_thumb.jpg"
+
+    @patch("parser.RAPIDAPI_KEY", "test-key")
+    @patch("parser.requests.get")
+    def test_extracts_string_caption(self, mock_get):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = RAPIDAPI_RESPONSE_STRING_CAPTION
+        mock_get.return_value = resp
+
+        result = _fetch_rapidapi("DEF456")
+
+        assert result["caption"] == "Street food in Bangkok"
+        assert result["creator"] == "bkk_eats"
+        assert result["thumbnail_url"] == "https://img.example.com/bkk.jpg"
+
+    @patch("parser.RAPIDAPI_KEY", "test-key")
+    @patch("parser.requests.get")
+    def test_handles_missing_caption(self, mock_get):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = RAPIDAPI_RESPONSE_NO_CAPTION
+        mock_get.return_value = resp
+
+        result = _fetch_rapidapi("GHI789")
+
+        assert result["caption"] == ""
+        assert result["creator"] == "silent_poster"
+
+    @patch("parser.RAPIDAPI_KEY", "test-key")
+    @patch("parser.requests.get")
+    def test_empty_items_returns_empty(self, mock_get):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = RAPIDAPI_RESPONSE_EMPTY_ITEMS
+        mock_get.return_value = resp
+
+        result = _fetch_rapidapi("EMPTY1")
+
+        assert result == {}
+
+    @patch("parser.RAPIDAPI_KEY", "test-key")
+    @patch("parser.requests.get")
+    def test_network_failure_returns_empty(self, mock_get):
+        mock_get.side_effect = Exception("connection refused")
+
+        result = _fetch_rapidapi("FAIL00")
+
+        assert result == {}
+
+    @patch("parser.RAPIDAPI_KEY", "test-key")
+    @patch("parser.requests.get")
+    def test_http_error_returns_empty(self, mock_get):
+        resp = MagicMock()
+        resp.raise_for_status.side_effect = Exception("HTTP 403")
+        mock_get.return_value = resp
+
+        result = _fetch_rapidapi("FORBID")
+
+        assert result == {}
+
+    def test_no_api_key_returns_empty(self):
+        with patch("parser.RAPIDAPI_KEY", ""):
+            result = _fetch_rapidapi("ANY123")
+            assert result == {}
+
+
+# ---------------------------------------------------------------------------
 # Full scrape pipeline (mocked)
 # ---------------------------------------------------------------------------
 
 class TestScrapeInstagram:
     @patch("parser._fetch_html_meta")
     @patch("parser._fetch_oembed")
-    def test_combines_oembed_and_html(self, mock_oembed, mock_html):
+    @patch("parser._fetch_rapidapi")
+    def test_rapidapi_first_priority(self, mock_rapid, mock_oembed, mock_html):
+        mock_rapid.return_value = {
+            "caption": "RapidAPI caption wins",
+            "creator": "rapid_user",
+            "thumbnail_url": "https://img.example.com/rapid.jpg",
+        }
+
+        post = scrape_instagram("https://www.instagram.com/p/RAP123/")
+
+        assert post.caption == "RapidAPI caption wins"
+        assert post.creator == "rapid_user"
+        assert post.thumbnail_url == "https://img.example.com/rapid.jpg"
+        mock_oembed.assert_not_called()
+        mock_html.assert_not_called()
+
+    @patch("parser._fetch_html_meta")
+    @patch("parser._fetch_oembed")
+    @patch("parser._fetch_rapidapi")
+    def test_falls_back_to_oembed_when_rapidapi_empty(self, mock_rapid, mock_oembed, mock_html):
+        mock_rapid.return_value = {}
         mock_oembed.return_value = {
             "title": "Tokyo street food tour",
             "author_name": "nomad_eats",
             "thumbnail_url": "https://img.example.com/oembed.jpg",
-        }
-        mock_html.return_value = {
-            "caption": "",
-            "creator": "",
-            "thumbnail_url": "",
         }
 
         post = scrape_instagram("https://www.instagram.com/p/XYZ789/")
@@ -229,10 +364,13 @@ class TestScrapeInstagram:
         assert post.creator == "nomad_eats"
         assert post.thumbnail_url == "https://img.example.com/oembed.jpg"
         assert "Tokyo street food tour" in post.raw_text
+        mock_html.assert_not_called()
 
     @patch("parser._fetch_html_meta")
     @patch("parser._fetch_oembed")
-    def test_falls_back_to_html_when_oembed_empty(self, mock_oembed, mock_html):
+    @patch("parser._fetch_rapidapi")
+    def test_falls_back_to_html_when_both_empty(self, mock_rapid, mock_oembed, mock_html):
+        mock_rapid.return_value = {}
         mock_oembed.return_value = {}
         mock_html.return_value = {
             "caption": "Fallback caption from HTML",
@@ -248,7 +386,9 @@ class TestScrapeInstagram:
 
     @patch("parser._fetch_html_meta")
     @patch("parser._fetch_oembed")
-    def test_empty_scrape_still_returns_skeleton(self, mock_oembed, mock_html):
+    @patch("parser._fetch_rapidapi")
+    def test_empty_scrape_still_returns_skeleton(self, mock_rapid, mock_oembed, mock_html):
+        mock_rapid.return_value = {}
         mock_oembed.return_value = {}
         mock_html.return_value = {"caption": "", "creator": "", "thumbnail_url": ""}
 
@@ -258,6 +398,28 @@ class TestScrapeInstagram:
         assert post.post_id == "EMPTY00"
         assert post.caption == ""
         assert post.raw_text == ""
+
+    @patch("parser._fetch_html_meta")
+    @patch("parser._fetch_oembed")
+    @patch("parser._fetch_rapidapi")
+    def test_rapidapi_no_caption_falls_through(self, mock_rapid, mock_oembed, mock_html):
+        """RapidAPI returns creator but no caption — should fall to oembed."""
+        mock_rapid.return_value = {
+            "caption": "",
+            "creator": "rapid_user",
+            "thumbnail_url": "",
+        }
+        mock_oembed.return_value = {
+            "title": "Oembed fills the gap",
+            "author_name": "oembed_user",
+            "thumbnail_url": "https://img.example.com/oembed.jpg",
+        }
+
+        post = scrape_instagram("https://www.instagram.com/p/PARTIAL/")
+
+        assert post.caption == "Oembed fills the gap"
+        assert post.creator == "rapid_user"  # kept from RapidAPI
+        mock_html.assert_not_called()
 
 
 class TestScrapeTiktok:
@@ -407,3 +569,63 @@ class TestBuildRawText:
     def test_all_empty(self):
         post = ParsedPost(url="x", platform="instagram")
         assert _build_raw_text(post) == ""
+
+
+# ---------------------------------------------------------------------------
+# Live integration test (hits the real network — run explicitly with -k live)
+# ---------------------------------------------------------------------------
+
+LIVE_INSTAGRAM_URL = (
+    "https://www.instagram.com/reel/DVqnjpBDxZp/"
+    "?utm_source=ig_web_copy_link&igsh=MzRlODBiNWFlZA=="
+)
+
+
+class TestLiveInstagram:
+    """
+    These tests make real HTTP requests to Instagram.
+    Run them explicitly:  python3 -m pytest test_parser.py -v -k live
+    """
+
+    def test_live_detect_platform(self):
+        assert detect_platform(LIVE_INSTAGRAM_URL) == "instagram"
+
+    def test_live_validate_url(self):
+        cleaned = validate_url(LIVE_INSTAGRAM_URL)
+        assert "instagram.com" in cleaned
+
+    def test_live_extract_shortcode(self):
+        code = extract_shortcode(LIVE_INSTAGRAM_URL)
+        assert code == "DVqnjpBDxZp"
+
+    def test_live_scrape(self):
+        post = scrape_instagram(LIVE_INSTAGRAM_URL)
+
+        print(f"\n{'='*60}")
+        print(f"  POST ID:       {post.post_id}")
+        print(f"  URL:           {post.url}")
+        print(f"  PLATFORM:      {post.platform}")
+        print(f"  CREATOR:       {post.creator}")
+        print(f"  CAPTION:       {post.caption[:200]}{'...' if len(post.caption) > 200 else ''}")
+        print(f"  THUMBNAIL:     {post.thumbnail_url[:100] if post.thumbnail_url else '(none)'}")
+        print(f"  RAW TEXT:      {post.raw_text[:200]}{'...' if len(post.raw_text) > 200 else ''}")
+        print(f"{'='*60}\n")
+
+        assert post.platform == "instagram"
+        assert post.post_id == "DVqnjpBDxZp"
+        assert isinstance(post.caption, str)
+        assert isinstance(post.raw_text, str)
+
+    def test_live_to_normalized(self):
+        post = scrape_instagram(LIVE_INSTAGRAM_URL)
+        norm = post.to_normalized()
+
+        assert norm["post_id"] == "DVqnjpBDxZp"
+        assert norm["platform"] == "instagram"
+        assert "url" in norm
+        assert "raw_text" in norm
+
+    def test_live_parse_url(self):
+        post = parse_url(LIVE_INSTAGRAM_URL)
+        assert post.platform == "instagram"
+        assert post.post_id == "DVqnjpBDxZp"
