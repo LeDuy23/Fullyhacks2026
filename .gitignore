@@ -1,6 +1,13 @@
-node_modules/
 venv/
 __pycache__/
 *.pyc
 .env
+.env.example
+.env.local
+.env.*.local
 config.js
+*.pem
+secrets
+
+# Windows reserved name — never create; breaks `git add` if present
+nul
