@@ -1,0 +1,10 @@
+{
+  "name": "fullyhacks2026",
+  "private": true,
+  "scripts": {
+    "dev": "serve -l tcp://127.0.0.1:4321 ."
+  },
+  "devDependencies": {
+    "serve": "^14.2.4"
+  }
+}
