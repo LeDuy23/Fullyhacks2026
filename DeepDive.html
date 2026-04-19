@@ -151,6 +151,8 @@ async function pollReelExtractionJob(jobId) {
 
 const LS_USER_LISTS = 'dd_user_lists';
 const LS_USER_SPOTS = 'dd_user_spots';
+/** Import-review appearance inside Add spots → extract: 'dark' | 'light' */
+const LS_IMPORT_UI_THEME = 'dd_import_ui_theme';
 
 const DEFAULT_USER_LISTS = [
   { id: 'l1', name: 'Favorites', icon: '⭐', color: '#ffc277' },
@@ -2125,6 +2127,7 @@ function AddSpotsSheet({
   onAddPlaceToMap = () => {},
   onAddPlaceToList = () => {},
   onCreateList = () => '',
+  importUiTheme = 'dark',
 }) {
   const extractFileInputRef = useRef(null);
   const [view, setView] = useState('grid');
@@ -2136,6 +2139,8 @@ function AddSpotsSheet({
   const [extractJson, setExtractJson] = useState(null);
   const [extractMeta, setExtractMeta] = useState(null);
   const [showImportReview, setShowImportReview] = useState(false);
+  const reviewLight = showImportReview && importUiTheme === 'light';
+  const sourceReviewDark = showImportReview && !reviewLight;
   const [listPickByIdx, setListPickByIdx] = useState({});
   const [addedPlaces, setAddedPlaces] = useState({});
   const [selectedPlaceKeys, setSelectedPlaceKeys] = useState({});
@@ -2406,14 +2411,14 @@ function AddSpotsSheet({
       {view === 'extract' ? (
       <div style={{
         padding:'24px 20px',
-        background: showImportReview ? '#f3f4f6' : `linear-gradient(180deg,${C.navy},${C.deep})`,
+        background: reviewLight ? '#f3f4f6' : `linear-gradient(180deg,${C.navy},${C.deep})`,
         height:'100%',
         display:'flex',flexDirection:'column',overflowY:'auto',
       }}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
           <button type="button" data-testid="addspots-extract-back" onClick={()=>{ resetExtractPanel(); setView('grid'); }}
             style={{
-              color: showImportReview ? '#111827' : C.biolume,
+              color: reviewLight ? '#111827' : C.biolume,
               fontSize:14,fontWeight:800,background:'none',border:'none',cursor:'pointer',
             }}>
             ← Back
@@ -2421,9 +2426,9 @@ function AddSpotsSheet({
           <button type="button" data-testid="addspots-close" onClick={onClose}
             style={{
               width:32,height:32,borderRadius:'50%',
-              background: showImportReview ? '#ffffff' : C.glass,
-              border:`1px solid ${showImportReview ? 'rgba(17,24,39,0.12)' : C.glassBd}`,
-              color: showImportReview ? '#6b7280' : C.textSec,
+              background: reviewLight ? '#ffffff' : C.glass,
+              border:`1px solid ${reviewLight ? 'rgba(17,24,39,0.12)' : C.glassBd}`,
+              color: reviewLight ? '#6b7280' : C.textSec,
               fontSize:18,cursor:'pointer',
               display:'flex',alignItems:'center',justifyContent:'center',
             }}>✕</button>
@@ -2485,8 +2490,8 @@ function AddSpotsSheet({
           </>
         ) : (
           <div style={{marginBottom:12,textAlign:'center'}}>
-            <h3 style={{color:'#111827',fontSize:20,fontWeight:900,marginBottom:6}}>Import Locations</h3>
-            <p style={{color:'#6b7280',fontSize:13,lineHeight:1.5,marginBottom:0}}>
+            <h3 style={{color: reviewLight ? '#111827' : 'white',fontSize:20,fontWeight:900,marginBottom:6}}>Import Locations</h3>
+            <p style={{color: reviewLight ? '#6b7280' : C.textSec,fontSize:13,lineHeight:1.5,marginBottom:0}}>
               Review matches before saving to your map or lists.
             </p>
           </div>
@@ -2494,9 +2499,9 @@ function AddSpotsSheet({
         {extractErr && (
           <div data-testid="addspots-extract-error" style={{
             marginTop:12,padding:12,borderRadius:12,fontSize:12,fontWeight:700,
-            background: showImportReview ? '#fff1f2' : 'rgba(255,110,122,0.12)',
-            border: showImportReview ? '1px solid rgba(244,63,94,0.25)' : 'none',
-            color: showImportReview ? '#9f1239' : '#ffb3bc',
+            background: reviewLight ? '#fff1f2' : 'rgba(255,110,122,0.12)',
+            border: reviewLight ? '1px solid rgba(244,63,94,0.25)' : 'none',
+            color: reviewLight ? '#9f1239' : '#ffb3bc',
           }}>{extractErr}</div>
         )}
         {extractJson && (
@@ -2505,9 +2510,9 @@ function AddSpotsSheet({
               <ExtractInsightsSummary row={extractJson?.results?.[0]} />
             ) : (
               <details style={{marginBottom:12}}>
-                <summary style={{color:'#6b7280',fontSize:12,cursor:'pointer',fontWeight:700}}>AI details</summary>
+                <summary style={{color: reviewLight ? '#6b7280' : C.textSec,fontSize:12,cursor:'pointer',fontWeight:700}}>AI details</summary>
                 <div style={{marginTop:10}}>
-                  <ExtractInsightsSummary row={extractJson?.results?.[0]} variant="light" />
+                  <ExtractInsightsSummary row={extractJson?.results?.[0]} variant={reviewLight ? 'light' : 'dark'} />
                 </div>
               </details>
             )}
@@ -2516,17 +2521,22 @@ function AddSpotsSheet({
                 marginBottom:12,
                 padding:14,
                 borderRadius:16,
-                background:'#ffffff',
-                border:'1px solid rgba(17,24,39,0.08)',
-                boxShadow:'0 10px 30px rgba(17,24,39,0.08)',
+                background: sourceReviewDark ? C.glassCard : '#ffffff',
+                border: sourceReviewDark ? `1px solid ${C.glassBd}` : '1px solid rgba(17,24,39,0.08)',
+                boxShadow: sourceReviewDark ? '0 12px 40px rgba(0,0,0,0.35)' : '0 10px 30px rgba(17,24,39,0.08)',
               }}>
                 <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
                   <div style={{position:'relative',width:76,height:76,flexShrink:0}}>
                     {sourceThumb ? (
-                      <img src={sourceThumb} alt="" style={{width:76,height:76,borderRadius:14,objectFit:'cover',border:'1px solid rgba(17,24,39,0.08)'}} />
+                      <img src={sourceThumb} alt="" style={{
+                        width:76,height:76,borderRadius:14,objectFit:'cover',
+                        border: sourceReviewDark ? `1px solid ${C.glassBd}` : '1px solid rgba(17,24,39,0.08)',
+                      }} />
                     ) : (
                       <div style={{
-                        width:76,height:76,borderRadius:14,background:'#f3f4f6',border:'1px solid rgba(17,24,39,0.08)',
+                        width:76,height:76,borderRadius:14,
+                        background: sourceReviewDark ? 'rgba(255,255,255,0.06)' : '#f3f4f6',
+                        border: sourceReviewDark ? `1px solid ${C.glassBd}` : '1px solid rgba(17,24,39,0.08)',
                         display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,
                       }}>🎬</div>
                     )}
@@ -2534,26 +2544,27 @@ function AddSpotsSheet({
                       <div style={{
                         position:'absolute',right:-6,bottom:-6,
                         padding:'4px 8px',borderRadius:999,
-                        background:'#111827',color:'#ffffff',fontSize:10,fontWeight:900,
-                        border:'2px solid #ffffff',
+                        background: sourceReviewDark ? C.biolume : '#111827',
+                        color: sourceReviewDark ? C.deep : '#ffffff',fontSize:10,fontWeight:900,
+                        border: sourceReviewDark ? `2px solid ${C.deep}` : '2px solid #ffffff',
                       }}>
                         {extractPlacesInfo.places.length} {extractPlacesInfo.places.length === 1 ? 'Spot' : 'Spots'}
                       </div>
                     ) : null}
                   </div>
                   <div style={{minWidth:0,flex:1}}>
-                    <div style={{color:'#111827',fontSize:13,fontWeight:800,lineHeight:1.35,marginBottom:6}}>
+                    <div style={{color: sourceReviewDark ? 'white' : '#111827',fontSize:13,fontWeight:800,lineHeight:1.35,marginBottom:6}}>
                       {sourceCaptionPreview || 'Imported reel'}
                     </div>
-                    <div style={{display:'flex',alignItems:'center',gap:8,color:'#6b7280',fontSize:12,fontWeight:700}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,color: sourceReviewDark ? C.textSec : '#6b7280',fontSize:12,fontWeight:700}}>
                       <span style={{display:'inline-flex',alignItems:'center',gap:6}}>
                         <span aria-hidden="true">📌</span>
                         Saved from {sourcePlatformLabel}
                       </span>
-                      {sourceAuthor ? <span style={{color:'#9ca3af',fontWeight:600}}>· {sourceAuthor}</span> : null}
+                      {sourceAuthor ? <span style={{color: sourceReviewDark ? C.textMut : '#9ca3af',fontWeight:600}}>· {sourceAuthor}</span> : null}
                     </div>
                     {sourceUrl ? (
-                      <div style={{marginTop:8,color:'#9ca3af',fontSize:11,wordBreak:'break-all'}}>{sourceUrl}</div>
+                      <div style={{marginTop:8,color: sourceReviewDark ? C.textMut : '#9ca3af',fontSize:11,wordBreak:'break-all'}}>{sourceUrl}</div>
                     ) : null}
                   </div>
                 </div>
@@ -2561,11 +2572,14 @@ function AddSpotsSheet({
             ) : null}
             {extractPlacesInfo.places.length === 0 ? (
               <div style={{
-                padding:14,borderRadius:16,background:'#ffffff',
-                border:'1px solid rgba(17,24,39,0.08)',color:'#6b7280',fontSize:13,
-                boxShadow:'0 10px 30px rgba(17,24,39,0.06)',
+                padding:14,borderRadius:16,
+                background: sourceReviewDark ? C.glassCard : '#ffffff',
+                border: sourceReviewDark ? `1px solid ${C.glassBd}` : '1px solid rgba(17,24,39,0.08)',
+                color: sourceReviewDark ? C.textSec : '#6b7280',fontSize:13,
+                boxShadow: sourceReviewDark ? '0 12px 40px rgba(0,0,0,0.3)' : '0 10px 30px rgba(17,24,39,0.06)',
               }}>
-                No places were detected. Try pasting a caption with venue names, or open <strong style={{color:'#111827'}}>AI details</strong> for more context.
+                No places were detected. Try pasting a caption with venue names, or open{' '}
+                <strong style={{color: sourceReviewDark ? 'white' : '#111827'}}>AI details</strong> for more context.
               </div>
             ) : (
               <>
@@ -2574,9 +2588,15 @@ function AddSpotsSheet({
                     marginBottom:12,
                     padding:'12px 14px',
                     borderRadius:14,
-                    background: importBannerTone === 'warn' ? '#fff7ed' : importBannerTone === 'info' ? '#eff6ff' : '#ecfdf5',
-                    border: importBannerTone === 'warn' ? '1px solid #fdba74' : importBannerTone === 'info' ? '1px solid #bfdbfe' : '1px solid #6ee7b7',
-                    color: importBannerTone === 'warn' ? '#9a3412' : importBannerTone === 'info' ? '#1e3a8a' : '#065f46',
+                    background: reviewLight
+                      ? (importBannerTone === 'warn' ? '#fff7ed' : importBannerTone === 'info' ? '#eff6ff' : '#ecfdf5')
+                      : (importBannerTone === 'warn' ? 'rgba(251,146,60,0.12)' : importBannerTone === 'info' ? 'rgba(59,130,246,0.14)' : 'rgba(16,185,129,0.12)'),
+                    border: reviewLight
+                      ? (importBannerTone === 'warn' ? '1px solid #fdba74' : importBannerTone === 'info' ? '1px solid #bfdbfe' : '1px solid #6ee7b7')
+                      : (importBannerTone === 'warn' ? '1px solid rgba(251,146,60,0.35)' : importBannerTone === 'info' ? '1px solid rgba(96,165,250,0.35)' : '1px solid rgba(52,211,153,0.35)'),
+                    color: reviewLight
+                      ? (importBannerTone === 'warn' ? '#9a3412' : importBannerTone === 'info' ? '#1e3a8a' : '#065f46')
+                      : (importBannerTone === 'warn' ? '#fdba74' : importBannerTone === 'info' ? '#93c5fd' : '#6ee7b7'),
                     fontSize:13,
                     fontWeight:700,
                     lineHeight:1.45,
@@ -2586,7 +2606,7 @@ function AddSpotsSheet({
                 ) : null}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,gap:8,flexWrap:'wrap'}}>
                   <div style={{
-                    color: showImportReview ? '#111827' : C.biolume,
+                    color: reviewLight ? '#111827' : C.biolume,
                     fontSize:12,fontWeight:900,letterSpacing:0.2,
                   }}>
                     {showImportReview ? 'Matches' : `We found ${extractPlacesInfo.places.length} locations`}
@@ -2595,9 +2615,9 @@ function AddSpotsSheet({
                   <button type="button" onClick={toggleAllPicked}
                     style={{
                       padding:'8px 12px',borderRadius:12,
-                      background: showImportReview ? '#ffffff' : 'rgba(255,255,255,0.08)',
-                      border: showImportReview ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
-                      color: showImportReview ? '#111827' : 'white',
+                      background: reviewLight ? '#ffffff' : 'rgba(255,255,255,0.08)',
+                      border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                      color: reviewLight ? '#111827' : 'white',
                       fontSize:12,fontWeight:800,cursor:'pointer',
                     }}>
                     {selectedPlaces.length === extractPlacesInfo.places.length ? 'Unselect all' : 'Select all'}
@@ -2609,9 +2629,9 @@ function AddSpotsSheet({
                   overflowY:'auto',
                   padding: showImportReview ? 12 : 0,
                   borderRadius: showImportReview ? 18 : 0,
-                  background: showImportReview ? '#ffffff' : 'transparent',
-                  border: showImportReview ? '1px solid rgba(17,24,39,0.08)' : 'none',
-                  boxShadow: showImportReview ? '0 18px 50px rgba(17,24,39,0.10)' : 'none',
+                  background: reviewLight ? '#ffffff' : (showImportReview ? 'rgba(8,22,50,0.45)' : 'transparent'),
+                  border: reviewLight ? '1px solid rgba(17,24,39,0.08)' : (showImportReview ? `1px solid ${C.glassBd}` : 'none'),
+                  boxShadow: reviewLight ? '0 18px 50px rgba(17,24,39,0.10)' : (showImportReview ? '0 12px 40px rgba(0,0,0,0.35)' : 'none'),
                 }}>
                   {extractPlacesInfo.places.map((place, idx) => {
                     const key = `${idx}-${place.name}`;
@@ -2623,38 +2643,42 @@ function AddSpotsSheet({
                       <div key={key} style={{
                         padding: showImportReview ? 12 : 12,
                         borderRadius: showImportReview ? 14 : 14,
-                        background: showImportReview ? '#ffffff' : C.glass,
-                        border: showImportReview ? '1px solid rgba(17,24,39,0.08)' : `1px solid ${C.glassBd}`,
-                        boxShadow: showImportReview ? '0 8px 24px rgba(17,24,39,0.06)' : 'none',
+                        background: reviewLight ? '#ffffff' : C.glass,
+                        border: reviewLight ? '1px solid rgba(17,24,39,0.08)' : `1px solid ${C.glassBd}`,
+                        boxShadow: reviewLight ? '0 8px 24px rgba(17,24,39,0.06)' : 'none',
                       }}>
                         <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
                           <div style={{position:'relative',width:64,height:64,flexShrink:0}}>
                             <img src={sourceThumb || 'https://placehold.co/72x72?text=Spot'} alt=""
-                              style={{width:64,height:64,borderRadius:14,objectFit:'cover',border:'1px solid rgba(17,24,39,0.08)'}} />
+                              style={{
+                                width:64,height:64,borderRadius:14,objectFit:'cover',
+                                border: reviewLight ? '1px solid rgba(17,24,39,0.08)' : `1px solid ${C.glassBd}`,
+                              }} />
                             <div style={{
                               position:'absolute',right:-6,bottom:-6,
                               width:22,height:22,borderRadius:'50%',
-                              background:'#111827',color:'#ffffff',
+                              background: reviewLight ? '#111827' : C.biolume,
+                              color: reviewLight ? '#ffffff' : C.deep,
                               display:'flex',alignItems:'center',justifyContent:'center',
                               fontSize:11,fontWeight:900,
-                              border:'2px solid #ffffff',
+                              border: reviewLight ? '2px solid #ffffff' : `2px solid ${C.deep}`,
                             }}>{idx + 1}</div>
                           </div>
                           <div style={{minWidth:0,flex:1}}>
-                            <div style={{color: showImportReview ? '#111827' : 'white',fontWeight:900,fontSize:15,marginBottom:6}}>{place.name}</div>
-                            <div style={{display:'flex',alignItems:'center',gap:8,color:'#6b7280',fontSize:12,fontWeight:800,marginBottom:8}}>
+                            <div style={{color: reviewLight ? '#111827' : 'white',fontWeight:900,fontSize:15,marginBottom:6}}>{place.name}</div>
+                            <div style={{display:'flex',alignItems:'center',gap:8,color: reviewLight ? '#6b7280' : C.textSec,fontSize:12,fontWeight:800,marginBottom:8}}>
                               <span style={{display:'inline-flex',alignItems:'center',gap:6}}>
                                 <span aria-hidden="true" style={{color: pinColor}}>📍</span>
                                 {place.type || 'place'}
                               </span>
                               {place.confidence != null ? (
-                                <span style={{color:'#9ca3af',fontWeight:700}}>
+                                <span style={{color: reviewLight ? '#9ca3af' : C.textMut,fontWeight:700}}>
                                   · {Math.round((place.confidence || 0) * 100)}% match
                                 </span>
                               ) : null}
                             </div>
                             {descPreview ? (
-                              <div style={{color:'#6b7280',fontSize:12,lineHeight:1.45,marginBottom: showImportReview ? 0 : 10}}>
+                              <div style={{color: reviewLight ? '#6b7280' : C.textSec,fontSize:12,lineHeight:1.45,marginBottom: showImportReview ? 0 : 10}}>
                                 {descPreview}
                               </div>
                             ) : null}
@@ -2664,9 +2688,9 @@ function AddSpotsSheet({
                             style={{
                               marginTop:4,
                               width:28,height:28,borderRadius:'50%',
-                              border:'2px solid #2563eb',
-                              background: selectedPlaceKeys[key] ? '#2563eb' : '#ffffff',
-                              color: selectedPlaceKeys[key] ? '#ffffff' : 'transparent',
+                              border: `2px solid ${reviewLight ? '#2563eb' : C.biolume}`,
+                              background: selectedPlaceKeys[key] ? (reviewLight ? '#2563eb' : C.biolume) : (reviewLight ? '#ffffff' : 'transparent'),
+                              color: selectedPlaceKeys[key] ? (reviewLight ? '#ffffff' : C.deep) : 'transparent',
                               cursor:'pointer',fontWeight:900,fontSize:14,flexShrink:0,
                               display:'flex',alignItems:'center',justifyContent:'center',
                             }}>
@@ -2740,8 +2764,10 @@ function AddSpotsSheet({
                     onClick={() => { setShowImportReview(false); setExtractEntry('links'); }}
                     style={{
                       marginTop:12,width:'100%',padding:12,borderRadius:14,
-                      border:'1px dashed rgba(17,24,39,0.22)',
-                      background:'#ffffff',color:'#111827',fontWeight:900,fontSize:13,cursor:'pointer',
+                      border: reviewLight ? '1px dashed rgba(17,24,39,0.22)' : `1px dashed ${C.glassBd}`,
+                      background: reviewLight ? '#ffffff' : 'rgba(255,255,255,0.04)',
+                      color: reviewLight ? '#111827' : C.textSec,
+                      fontWeight:900,fontSize:13,cursor:'pointer',
                     }}
                   >
                     + Add more spots
@@ -2751,12 +2777,12 @@ function AddSpotsSheet({
                   marginTop:12,
                   padding: showImportReview ? 12 : 12,
                   borderRadius: showImportReview ? 16 : 14,
-                  background: showImportReview ? '#ffffff' : 'rgba(0,229,212,0.06)',
-                  border: showImportReview ? '1px solid rgba(17,24,39,0.08)' : `1px solid rgba(0,229,212,0.2)`,
-                  boxShadow: showImportReview ? '0 12px 34px rgba(17,24,39,0.08)' : 'none',
+                  background: reviewLight ? '#ffffff' : (showImportReview ? 'rgba(0,229,212,0.08)' : 'rgba(0,229,212,0.06)'),
+                  border: reviewLight ? '1px solid rgba(17,24,39,0.08)' : `1px solid rgba(0,229,212,0.2)`,
+                  boxShadow: reviewLight ? '0 12px 34px rgba(17,24,39,0.08)' : 'none',
                 }}>
-                  <div style={{color: showImportReview ? '#6b7280' : C.textSec,fontSize:12,marginBottom:10,fontWeight:700}}>
-                    Selected: <span style={{color: showImportReview ? '#111827' : 'white',fontWeight:900}}>{selectedPlaces.length}</span> spot(s)
+                  <div style={{color: reviewLight ? '#6b7280' : C.textSec,fontSize:12,marginBottom:10,fontWeight:700}}>
+                    Selected: <span style={{color: reviewLight ? '#111827' : 'white',fontWeight:900}}>{selectedPlaces.length}</span> spot(s)
                   </div>
                   <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
                     <button type="button" onClick={()=>saveSelectedToList(bulkListId)}
@@ -2764,8 +2790,9 @@ function AddSpotsSheet({
                       style={{
                         flex: showImportReview ? '1 1 160px' : '0 1 auto',
                         padding:'12px 14px',borderRadius:14,
-                        border:'1px solid rgba(17,24,39,0.12)',
-                        background:'#f3f4f6',color:'#111827',
+                        border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                        background: reviewLight ? '#f3f4f6' : C.glass,
+                        color: reviewLight ? '#111827' : 'white',
                         fontWeight:900,fontSize:13,
                         cursor:selectedPlaces.length&&userLists.length&&bulkListId?'pointer':'not-allowed',
                         opacity:selectedPlaces.length&&userLists.length&&bulkListId?1:0.45,
@@ -2779,7 +2806,8 @@ function AddSpotsSheet({
                         flex: showImportReview ? '1 1 200px' : '0 1 auto',
                         padding:'12px 14px',borderRadius:14,
                         border:'none',
-                        background:'#111827',color:'#ffffff',
+                        background: reviewLight ? '#111827' : `linear-gradient(135deg,${C.biolume},#00a0e9)`,
+                        color: reviewLight ? '#ffffff' : C.deep,
                         fontWeight:900,fontSize:13,
                         cursor:selectedPlaces.length?'pointer':'not-allowed',
                         opacity:selectedPlaces.length?1:0.45,
@@ -2794,9 +2822,9 @@ function AddSpotsSheet({
                       style={{
                         flex:1,minWidth:160,
                         padding:'10px 12px',borderRadius:12,
-                        background: showImportReview ? '#ffffff' : 'rgba(255,255,255,0.08)',
-                        border: showImportReview ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
-                        color: showImportReview ? '#111827' : 'white',
+                        background: reviewLight ? '#ffffff' : 'rgba(255,255,255,0.08)',
+                        border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                        color: reviewLight ? '#111827' : 'white',
                         fontSize:12,fontWeight:700,
                       }}>
                       {userLists.length === 0 ? <option value="">No list yet</option> : (
@@ -2810,9 +2838,9 @@ function AddSpotsSheet({
                       style={{
                         flex:1,minWidth:160,
                         padding:'10px 12px',borderRadius:12,
-                        background: showImportReview ? '#ffffff' : 'rgba(255,255,255,0.08)',
-                        border: showImportReview ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
-                        color: showImportReview ? '#111827' : 'white',
+                        background: reviewLight ? '#ffffff' : 'rgba(255,255,255,0.08)',
+                        border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                        color: reviewLight ? '#111827' : 'white',
                         fontSize:12,fontWeight:700,
                       }} />
                     <button type="button" onClick={createListAndSave} disabled={!newListName.trim() || selectedPlaces.length===0}
@@ -2831,14 +2859,14 @@ function AddSpotsSheet({
             )}
             <details style={{marginTop:12}}>
               <summary style={{
-                color: showImportReview ? '#6b7280' : C.textMut,
+                color: reviewLight ? '#6b7280' : C.textMut,
                 fontSize:11,cursor:'pointer',
               }}>Raw JSON</summary>
               <pre style={{
                 marginTop:8,padding:10,borderRadius:10,
-                background: showImportReview ? '#ffffff' : 'rgba(0,0,0,0.25)',
-                border: showImportReview ? '1px solid rgba(17,24,39,0.08)' : 'none',
-                color: showImportReview ? '#6b7280' : C.textMut,
+                background: reviewLight ? '#ffffff' : 'rgba(0,0,0,0.25)',
+                border: reviewLight ? '1px solid rgba(17,24,39,0.08)' : 'none',
+                color: reviewLight ? '#6b7280' : C.textMut,
                 fontSize:10,overflow:'auto',maxHeight:120,whiteSpace:'pre-wrap',
               }}>
                 {JSON.stringify(extractJson, null, 2)}
@@ -3420,6 +3448,14 @@ function MainApp({ onSignOut }) {
   const [panel, setPanel] = useState(null);
   const [actionOpen, setActionOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [importUiTheme, setImportUiTheme] = useState(() => {
+    try {
+      const v = localStorage.getItem(LS_IMPORT_UI_THEME);
+      return v === 'light' ? 'light' : 'dark';
+    } catch (_) {
+      return 'dark';
+    }
+  });
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [trips, setTrips] = useState(TRIPS);
   const [planPrefill, setPlanPrefill] = useState('');
@@ -3470,6 +3506,12 @@ function MainApp({ onSignOut }) {
   useEffect(() => {
     saveJson(LS_USER_SPOTS, savedSpots);
   }, [savedSpots]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_IMPORT_UI_THEME, importUiTheme);
+    } catch (_) {}
+  }, [importUiTheme]);
 
   useEffect(() => {
     if (!profileOpen) return;
@@ -3991,6 +4033,21 @@ function MainApp({ onSignOut }) {
           )}
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button
+            type="button"
+            data-testid="header-import-theme-toggle"
+            title={importUiTheme === 'dark' ? 'Import screen: dark (tap for light cards)' : 'Import screen: light (tap for dark)'}
+            aria-pressed={importUiTheme === 'dark'}
+            onClick={() => setImportUiTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            style={{
+              width:36,height:36,borderRadius:12,
+              background:C.glass,border:`1px solid ${C.glassBd}`,
+              color:C.biolume,fontSize:17,cursor:'pointer',
+              display:'flex',alignItems:'center',justifyContent:'center',padding:0,
+            }}
+          >
+            {importUiTheme === 'dark' ? '🌙' : '☀️'}
+          </button>
           <div style={{position:'relative',cursor:'pointer'}}>
             <OllieOctopus size={36} hat={false}/>
             <div style={{position:'absolute',top:-2,right:-2,width:14,height:14,borderRadius:'50%',
@@ -4210,6 +4267,7 @@ function MainApp({ onSignOut }) {
               onAddPlaceToMap={addPlaceToMap}
               onAddPlaceToList={addPlaceToList}
               onCreateList={createListInline}
+              importUiTheme={importUiTheme}
             />
           )}
           {panel==='newlist' && (
