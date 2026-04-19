@@ -212,8 +212,9 @@ function pickPlacesFromExtract(data) {
 }
 
 /** Full extractor output (matches backend ExtractedPost) for the results panel. */
-function ExtractInsightsSummary({ row }) {
+function ExtractInsightsSummary({ row, variant = 'dark' }) {
   if (!row) return null;
+  const light = variant === 'light';
   const travelOk = row.is_travel_relevant !== false;
   const dests = row.destination_candidates || [];
   const activities = row.activities || [];
@@ -241,28 +242,46 @@ function ExtractInsightsSummary({ row }) {
     display:'inline-block', padding:'4px 10px', borderRadius:99, fontSize:11, fontWeight:700,
     background: bg || 'rgba(0,229,212,0.15)', color: C.biolume, marginRight:6, marginBottom:6,
   });
+  const chipStyleLight = (bg, fg) => ({
+    display:'inline-block', padding:'4px 10px', borderRadius:99, fontSize:11, fontWeight:700,
+    background: bg, color: fg, marginRight:6, marginBottom:6, border:'1px solid rgba(17,24,39,0.08)',
+  });
   return (
     <div
       data-testid="addspots-extract-insights"
       style={{
         marginBottom:14, padding:14, borderRadius:16,
-        background: travelOk ? 'rgba(0,229,212,0.06)' : 'rgba(255,110,122,0.08)',
-        border: `1px solid ${travelOk ? 'rgba(0,229,212,0.25)' : 'rgba(255,110,122,0.35)'}`,
+        background: light
+          ? (travelOk ? '#ffffff' : '#fff7ed')
+          : (travelOk ? 'rgba(0,229,212,0.06)' : 'rgba(255,110,122,0.08)'),
+        border: light
+          ? `1px solid ${travelOk ? 'rgba(17,24,39,0.10)' : 'rgba(251,146,60,0.35)'}`
+          : `1px solid ${travelOk ? 'rgba(0,229,212,0.25)' : 'rgba(255,110,122,0.35)'}`,
+        boxShadow: light ? '0 10px 30px rgba(17,24,39,0.06)' : 'none',
       }}
     >
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, flexWrap:'wrap', gap:8 }}>
-        <span style={{ color:C.biolume, fontSize:12, fontWeight:800, letterSpacing:0.4 }}>AI extraction</span>
+        <span style={{ color: light ? '#111827' : C.biolume, fontSize:12, fontWeight:900, letterSpacing:0.4 }}>AI extraction</span>
         <div style={{ display:'flex', gap:6, flexWrap:'wrap', justifyContent:'flex-end' }}>
           <span style={{
             fontSize:11, fontWeight:800, padding:'4px 10px', borderRadius:99,
-            background: travelOk ? 'rgba(0,229,212,0.2)' : 'rgba(255,110,122,0.2)',
-            color: travelOk ? C.biolume : '#ffb3bc',
+            background: light
+              ? (travelOk ? 'rgba(37,99,235,0.10)' : 'rgba(239,68,68,0.10)')
+              : (travelOk ? 'rgba(0,229,212,0.2)' : 'rgba(255,110,122,0.2)'),
+            color: light
+              ? (travelOk ? '#1d4ed8' : '#b91c1c')
+              : (travelOk ? C.biolume : '#ffb3bc'),
           }}>{travelOk ? 'Travel signal: strong' : 'Travel signal: weak'}</span>
           {reviewText ? (
             <span style={{
               fontSize:11, fontWeight:800, padding:'4px 10px', borderRadius:99,
-              background: reviewStatus === 'auto_confirmed' ? 'rgba(110,231,183,0.2)' : 'rgba(255,255,255,0.12)',
-              color: reviewStatus === 'auto_confirmed' ? '#9bf2cc' : '#f2f5ff',
+              background: reviewStatus === 'auto_confirmed'
+                ? (light ? 'rgba(16,185,129,0.12)' : 'rgba(110,231,183,0.2)')
+                : (light ? 'rgba(17,24,39,0.06)' : 'rgba(255,255,255,0.12)'),
+              color: reviewStatus === 'auto_confirmed'
+                ? (light ? '#047857' : '#9bf2cc')
+                : (light ? '#111827' : '#f2f5ff'),
+              border: light ? '1px solid rgba(17,24,39,0.08)' : 'none',
             }}>Status: {reviewText}</span>
           ) : null}
         </div>
@@ -270,23 +289,31 @@ function ExtractInsightsSummary({ row }) {
       {failureText ? (
         <div style={{
           marginBottom:10, padding:'8px 10px', borderRadius:10,
-          background:'rgba(255,110,122,0.12)', border:'1px solid rgba(255,110,122,0.28)',
-          color:'#ffc3ca', fontSize:11, fontWeight:700,
+          background: light ? '#fff1f2' : 'rgba(255,110,122,0.12)',
+          border: light ? '1px solid rgba(244,63,94,0.25)' : '1px solid rgba(255,110,122,0.28)',
+          color: light ? '#9f1239' : '#ffc3ca',
+          fontSize:11, fontWeight:700,
         }}>
           {failureText}
         </div>
       ) : null}
       {dests.length > 0 && (
         <div style={{ marginBottom:10 }}>
-          <div style={{ color:C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Destinations</div>
+          <div style={{ color: light ? '#6b7280' : C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Destinations</div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
             {dests.map((d, i) => (
               <span key={i} style={{
-                fontSize:12, color:'white', fontWeight:700,
-                padding:'6px 10px', borderRadius:10, background:'rgba(255,255,255,0.08)', border:`1px solid ${C.glassBd}`,
+                fontSize:12, color: light ? '#111827' : 'white', fontWeight:700,
+                padding:'6px 10px', borderRadius:10,
+                background: light ? '#f9fafb' : 'rgba(255,255,255,0.08)',
+                border: light ? '1px solid rgba(17,24,39,0.10)' : `1px solid ${C.glassBd}`,
               }}>
                 {d.name}
-                {d.confidence != null ? <span style={{ color:C.textMut, fontWeight:600, marginLeft:6 }}>{Math.round((d.confidence || 0) * 100)}%</span> : null}
+                {d.confidence != null ? (
+                  <span style={{ color: light ? '#6b7280' : C.textMut, fontWeight:600, marginLeft:6 }}>
+                    {Math.round((d.confidence || 0) * 100)}%
+                  </span>
+                ) : null}
               </span>
             ))}
           </div>
@@ -296,39 +323,61 @@ function ExtractInsightsSummary({ row }) {
         <div style={{ marginBottom:10 }}>
           {activities.length > 0 && (
             <div style={{ marginBottom:8 }}>
-              <div style={{ color:C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Activities</div>
+              <div style={{ color: light ? '#6b7280' : C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Activities</div>
               <div>{activities.map((a, i) => (
-                <span key={`act-${i}`} style={chipStyle('rgba(0,229,212,0.12)')}>{a}</span>
+                <span key={`act-${i}`} style={light ? chipStyleLight('rgba(37,99,235,0.08)', '#1d4ed8') : chipStyle('rgba(0,229,212,0.12)')}>{a}</span>
               ))}</div>
             </div>
           )}
           {vibes.length > 0 && (
             <div>
-              <div style={{ color:C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Vibes</div>
+              <div style={{ color: light ? '#6b7280' : C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Vibes</div>
               <div>{vibes.map((v, i) => (
-                <span key={`vibe-${i}`} style={{...chipStyle('rgba(167,139,250,0.15)'), color: '#d4c4f5'}}>{v}</span>
+                <span key={`vibe-${i}`} style={light ? chipStyleLight('rgba(124,58,237,0.10)', '#5b21b6') : { ...chipStyle('rgba(167,139,250,0.15)'), color: '#d4c4f5' }}>{v}</span>
               ))}</div>
             </div>
           )}
         </div>
       )}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom: notes ? 10 : 0 }}>
-        <div style={{ padding:8, borderRadius:10, background:'rgba(0,0,0,0.2)', fontSize:11 }}>
-          <div style={{ color:C.textMut, marginBottom:4 }}>Best time</div>
-          <div style={{ color:'white', fontWeight:700 }}>{times.length ? times.join(', ') : '—'}</div>
+        <div style={{
+          padding:8, borderRadius:10,
+          background: light ? '#f9fafb' : 'rgba(0,0,0,0.2)',
+          border: light ? '1px solid rgba(17,24,39,0.08)' : 'none',
+          fontSize:11,
+        }}>
+          <div style={{ color: light ? '#6b7280' : C.textMut, marginBottom:4 }}>Best time</div>
+          <div style={{ color: light ? '#111827' : 'white', fontWeight:700 }}>{times.length ? times.join(', ') : '—'}</div>
         </div>
-        <div style={{ padding:8, borderRadius:10, background:'rgba(0,0,0,0.2)', fontSize:11 }}>
-          <div style={{ color:C.textMut, marginBottom:4 }}>Budget</div>
-          <div style={{ color:'white', fontWeight:700 }}>{budget}</div>
+        <div style={{
+          padding:8, borderRadius:10,
+          background: light ? '#f9fafb' : 'rgba(0,0,0,0.2)',
+          border: light ? '1px solid rgba(17,24,39,0.08)' : 'none',
+          fontSize:11,
+        }}>
+          <div style={{ color: light ? '#6b7280' : C.textMut, marginBottom:4 }}>Budget</div>
+          <div style={{ color: light ? '#111827' : 'white', fontWeight:700 }}>{budget}</div>
         </div>
-        <div style={{ padding:8, borderRadius:10, background:'rgba(0,0,0,0.2)', fontSize:11 }}>
-          <div style={{ color:C.textMut, marginBottom:4 }}>Pace</div>
-          <div style={{ color:'white', fontWeight:700 }}>{pace}</div>
+        <div style={{
+          padding:8, borderRadius:10,
+          background: light ? '#f9fafb' : 'rgba(0,0,0,0.2)',
+          border: light ? '1px solid rgba(17,24,39,0.08)' : 'none',
+          fontSize:11,
+        }}>
+          <div style={{ color: light ? '#6b7280' : C.textMut, marginBottom:4 }}>Pace</div>
+          <div style={{ color: light ? '#111827' : 'white', fontWeight:700 }}>{pace}</div>
         </div>
       </div>
       {notes ? (
-        <div style={{ marginTop:10, padding:10, borderRadius:10, background:'rgba(255,255,255,0.04)', fontSize:12, color:C.textSec, lineHeight:1.45 }}>
-          <span style={{ color:C.biolume, fontWeight:800, fontSize:10, display:'block', marginBottom:6 }}>Notes</span>
+        <div style={{
+          marginTop:10, padding:10, borderRadius:10,
+          background: light ? '#f9fafb' : 'rgba(255,255,255,0.04)',
+          border: light ? '1px solid rgba(17,24,39,0.08)' : 'none',
+          fontSize:12,
+          color: light ? '#374151' : C.textSec,
+          lineHeight:1.45,
+        }}>
+          <span style={{ color: light ? '#2563eb' : C.biolume, fontWeight:900, fontSize:10, display:'block', marginBottom:6 }}>Notes</span>
           {notes}
         </div>
       ) : null}
@@ -2274,20 +2323,55 @@ function AddSpotsSheet({
   const saveSelectedToMap = () => {
     selectedPlaces.forEach((place) => onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint }));
   };
-  const saveSelectedToList = (listId) => {
+  const saveSelectedToList = (listId, listMeta) => {
     if (!listId) return;
-    selectedPlaces.forEach((place) => onAddPlaceToList({ name: place.name, destinationHint: extractPlacesInfo.destinationHint }, listId));
+    selectedPlaces.forEach((place) =>
+      onAddPlaceToList(
+        { name: place.name, destinationHint: extractPlacesInfo.destinationHint },
+        listId,
+        listMeta,
+      ),
+    );
   };
   const createListAndSave = () => {
     const nm = newListName.trim();
     if (!nm) return;
     const id = onCreateList(nm);
     if (id) {
-      saveSelectedToList(id);
+      // `onCreateList` updates parent state asynchronously; pass list meta so saves work immediately.
+      saveSelectedToList(id, { id, name: nm, icon: '📋', color: C.biolume });
       setBulkListId(id);
       setNewListName('');
     }
   };
+
+  const row0 = extractJson?.results?.[0] || null;
+  const sourceCaption = String(
+    extractMeta?.source?.caption ||
+      extractMeta?.source?.description ||
+      extractMeta?.source?.title ||
+      '',
+  ).trim();
+  const sourceAuthor = String(extractMeta?.source?.author || '').trim();
+  const sourcePlatformLabel = (() => {
+    const u = String(sourceUrl || '').toLowerCase();
+    if (u.includes('instagram.com') || u.includes('instagr.am')) return 'Instagram';
+    if (u.includes('tiktok.com') || u.includes('vm.tiktok.com') || u.includes('vt.tiktok.com')) return 'TikTok';
+    if (u.includes('google.') && u.includes('maps')) return 'Google Maps';
+    return 'Video';
+  })();
+  const sourceCaptionPreview = (() => {
+    const t = sourceCaption || String(row0?.notes || '').trim();
+    if (!t) return '';
+    const max = 140;
+    return t.length > max ? `${t.slice(0, max)}…` : t;
+  })();
+  const importBannerTone = (() => {
+    const fr = String(row0?.failure_reason || '');
+    if (fr === 'instagram_access_blocked' || fr === 'video_download_failed' || fr === 'places_unavailable') return 'warn';
+    if (fr === 'places_no_match' || fr === 'no_location_signal') return 'info';
+    return 'ok';
+  })();
 
   const cardBase = {
     padding:'18px',borderRadius:18,textAlign:'left',cursor:'pointer',
@@ -2320,17 +2404,29 @@ function AddSpotsSheet({
         onChange={onExtractImageChosen}
       />
       {view === 'extract' ? (
-      <div style={{padding:'24px 20px',background:`linear-gradient(180deg,${C.navy},${C.deep})`,height:'100%',
-        display:'flex',flexDirection:'column',overflowY:'auto'}}>
+      <div style={{
+        padding:'24px 20px',
+        background: showImportReview ? '#f3f4f6' : `linear-gradient(180deg,${C.navy},${C.deep})`,
+        height:'100%',
+        display:'flex',flexDirection:'column',overflowY:'auto',
+      }}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
           <button type="button" data-testid="addspots-extract-back" onClick={()=>{ resetExtractPanel(); setView('grid'); }}
-            style={{color:C.biolume,fontSize:14,fontWeight:800,background:'none',border:'none',cursor:'pointer'}}>
+            style={{
+              color: showImportReview ? '#111827' : C.biolume,
+              fontSize:14,fontWeight:800,background:'none',border:'none',cursor:'pointer',
+            }}>
             ← Back
           </button>
           <button type="button" data-testid="addspots-close" onClick={onClose}
-            style={{width:32,height:32,borderRadius:'50%',background:C.glass,
-              border:`1px solid ${C.glassBd}`,color:C.textSec,fontSize:18,cursor:'pointer',
-              display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+            style={{
+              width:32,height:32,borderRadius:'50%',
+              background: showImportReview ? '#ffffff' : C.glass,
+              border:`1px solid ${showImportReview ? 'rgba(17,24,39,0.12)' : C.glassBd}`,
+              color: showImportReview ? '#6b7280' : C.textSec,
+              fontSize:18,cursor:'pointer',
+              display:'flex',alignItems:'center',justifyContent:'center',
+            }}>✕</button>
         </div>
         {!showImportReview ? (
           <>
@@ -2388,146 +2484,321 @@ function AddSpotsSheet({
         </button>
           </>
         ) : (
-          <div style={{marginBottom:12}}>
-            <h3 style={{color:'white',fontSize:18,fontWeight:900,marginBottom:6}}>Import Locations</h3>
-            <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,marginBottom:0}}>
-              Review extracted spots, then save selected ones to your map or lists.
+          <div style={{marginBottom:12,textAlign:'center'}}>
+            <h3 style={{color:'#111827',fontSize:20,fontWeight:900,marginBottom:6}}>Import Locations</h3>
+            <p style={{color:'#6b7280',fontSize:13,lineHeight:1.5,marginBottom:0}}>
+              Review matches before saving to your map or lists.
             </p>
           </div>
         )}
         {extractErr && (
-          <div data-testid="addspots-extract-error" style={{marginTop:12,padding:12,borderRadius:12,
-            background:'rgba(255,110,122,0.12)',color:'#ffb3bc',fontSize:12}}>{extractErr}</div>
+          <div data-testid="addspots-extract-error" style={{
+            marginTop:12,padding:12,borderRadius:12,fontSize:12,fontWeight:700,
+            background: showImportReview ? '#fff1f2' : 'rgba(255,110,122,0.12)',
+            border: showImportReview ? '1px solid rgba(244,63,94,0.25)' : 'none',
+            color: showImportReview ? '#9f1239' : '#ffb3bc',
+          }}>{extractErr}</div>
         )}
         {extractJson && (
           <div data-testid="addspots-extract-result" style={{marginTop:14}}>
-            <ExtractInsightsSummary row={extractJson?.results?.[0]} />
+            {!showImportReview ? (
+              <ExtractInsightsSummary row={extractJson?.results?.[0]} />
+            ) : (
+              <details style={{marginBottom:12}}>
+                <summary style={{color:'#6b7280',fontSize:12,cursor:'pointer',fontWeight:700}}>AI details</summary>
+                <div style={{marginTop:10}}>
+                  <ExtractInsightsSummary row={extractJson?.results?.[0]} variant="light" />
+                </div>
+              </details>
+            )}
             {(sourceThumb || sourceUrl) ? (
-              <div style={{marginBottom:12,padding:12,borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
-                <div style={{color:C.textMut,fontSize:10,fontWeight:800,marginBottom:8,textTransform:'uppercase'}}>Imported from video</div>
-                <div style={{display:'flex',gap:10,alignItems:'center'}}>
-                  {sourceThumb ? (
-                    <img src={sourceThumb} alt="" style={{width:72,height:72,borderRadius:10,objectFit:'cover',border:`1px solid ${C.glassBd}`}} />
-                  ) : (
-                    <div style={{width:72,height:72,borderRadius:10,background:'rgba(255,255,255,0.06)',border:`1px solid ${C.glassBd}`,
-                      display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>🎬</div>
-                  )}
-                  <div style={{minWidth:0}}>
-                    <div style={{color:'white',fontSize:12,fontWeight:700,marginBottom:4}}>Import Locations</div>
-                    <div style={{color:C.textSec,fontSize:11,wordBreak:'break-all'}}>{sourceUrl || 'Reel / video import'}</div>
+              <div style={{
+                marginBottom:12,
+                padding:14,
+                borderRadius:16,
+                background:'#ffffff',
+                border:'1px solid rgba(17,24,39,0.08)',
+                boxShadow:'0 10px 30px rgba(17,24,39,0.08)',
+              }}>
+                <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
+                  <div style={{position:'relative',width:76,height:76,flexShrink:0}}>
+                    {sourceThumb ? (
+                      <img src={sourceThumb} alt="" style={{width:76,height:76,borderRadius:14,objectFit:'cover',border:'1px solid rgba(17,24,39,0.08)'}} />
+                    ) : (
+                      <div style={{
+                        width:76,height:76,borderRadius:14,background:'#f3f4f6',border:'1px solid rgba(17,24,39,0.08)',
+                        display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,
+                      }}>🎬</div>
+                    )}
+                    {extractPlacesInfo.places.length > 0 ? (
+                      <div style={{
+                        position:'absolute',right:-6,bottom:-6,
+                        padding:'4px 8px',borderRadius:999,
+                        background:'#111827',color:'#ffffff',fontSize:10,fontWeight:900,
+                        border:'2px solid #ffffff',
+                      }}>
+                        {extractPlacesInfo.places.length} {extractPlacesInfo.places.length === 1 ? 'Spot' : 'Spots'}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div style={{minWidth:0,flex:1}}>
+                    <div style={{color:'#111827',fontSize:13,fontWeight:800,lineHeight:1.35,marginBottom:6}}>
+                      {sourceCaptionPreview || 'Imported reel'}
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:8,color:'#6b7280',fontSize:12,fontWeight:700}}>
+                      <span style={{display:'inline-flex',alignItems:'center',gap:6}}>
+                        <span aria-hidden="true">📌</span>
+                        Saved from {sourcePlatformLabel}
+                      </span>
+                      {sourceAuthor ? <span style={{color:'#9ca3af',fontWeight:600}}>· {sourceAuthor}</span> : null}
+                    </div>
+                    {sourceUrl ? (
+                      <div style={{marginTop:8,color:'#9ca3af',fontSize:11,wordBreak:'break-all'}}>{sourceUrl}</div>
+                    ) : null}
                   </div>
                 </div>
               </div>
             ) : null}
             {extractPlacesInfo.places.length === 0 ? (
-              <div style={{padding:12,borderRadius:12,background:C.glass,color:C.textSec,fontSize:13}}>
-                No places were detected. Try pasting a caption with venue names, or check the raw response below.
+              <div style={{
+                padding:14,borderRadius:16,background:'#ffffff',
+                border:'1px solid rgba(17,24,39,0.08)',color:'#6b7280',fontSize:13,
+                boxShadow:'0 10px 30px rgba(17,24,39,0.06)',
+              }}>
+                No places were detected. Try pasting a caption with venue names, or open <strong style={{color:'#111827'}}>AI details</strong> for more context.
               </div>
             ) : (
               <>
+                {showImportReview ? (
+                  <div style={{
+                    marginBottom:12,
+                    padding:'12px 14px',
+                    borderRadius:14,
+                    background: importBannerTone === 'warn' ? '#fff7ed' : importBannerTone === 'info' ? '#eff6ff' : '#ecfdf5',
+                    border: importBannerTone === 'warn' ? '1px solid #fdba74' : importBannerTone === 'info' ? '1px solid #bfdbfe' : '1px solid #6ee7b7',
+                    color: importBannerTone === 'warn' ? '#9a3412' : importBannerTone === 'info' ? '#1e3a8a' : '#065f46',
+                    fontSize:13,
+                    fontWeight:700,
+                    lineHeight:1.45,
+                  }}>
+                    We found <span style={{fontWeight:900}}>{extractPlacesInfo.places.length}</span> locations — review matches before saving.
+                  </div>
+                ) : null}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,gap:8,flexWrap:'wrap'}}>
-                  <div style={{color:C.biolume,fontSize:12,fontWeight:800,letterSpacing:0.5}}>
-                    We found {extractPlacesInfo.places.length} locations {extractPlacesInfo.destinationHint ? `· near ${extractPlacesInfo.destinationHint}` : ''}
+                  <div style={{
+                    color: showImportReview ? '#111827' : C.biolume,
+                    fontSize:12,fontWeight:900,letterSpacing:0.2,
+                  }}>
+                    {showImportReview ? 'Matches' : `We found ${extractPlacesInfo.places.length} locations`}
+                    {!showImportReview && extractPlacesInfo.destinationHint ? ` · near ${extractPlacesInfo.destinationHint}` : ''}
                   </div>
                   <button type="button" onClick={toggleAllPicked}
-                    style={{padding:'6px 10px',borderRadius:10,background:'rgba(255,255,255,0.08)',border:`1px solid ${C.glassBd}`,color:'white',fontSize:11,cursor:'pointer'}}>
+                    style={{
+                      padding:'8px 12px',borderRadius:12,
+                      background: showImportReview ? '#ffffff' : 'rgba(255,255,255,0.08)',
+                      border: showImportReview ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                      color: showImportReview ? '#111827' : 'white',
+                      fontSize:12,fontWeight:800,cursor:'pointer',
+                    }}>
                     {selectedPlaces.length === extractPlacesInfo.places.length ? 'Unselect all' : 'Select all'}
                   </button>
                 </div>
-                <div style={{display:'flex',flexDirection:'column',gap:10,maxHeight:280,overflowY:'auto'}}>
+                <div style={{
+                  display:'flex',flexDirection:'column',gap:10,
+                  maxHeight: showImportReview ? 360 : 280,
+                  overflowY:'auto',
+                  padding: showImportReview ? 12 : 0,
+                  borderRadius: showImportReview ? 18 : 0,
+                  background: showImportReview ? '#ffffff' : 'transparent',
+                  border: showImportReview ? '1px solid rgba(17,24,39,0.08)' : 'none',
+                  boxShadow: showImportReview ? '0 18px 50px rgba(17,24,39,0.10)' : 'none',
+                }}>
                   {extractPlacesInfo.places.map((place, idx) => {
                     const key = `${idx}-${place.name}`;
                     const st = addedPlaces[key];
+                    const pinColor = /restaurant|cafe|coffee|bar|food|dining|bakery|meal/i.test(place.type || '') ? '#ef4444' : '#3b82f6';
+                    const desc = String(place.reason || '').trim();
+                    const descPreview = desc.length > 140 ? `${desc.slice(0, 140)}…` : desc;
                     return (
-                      <div key={key} style={{padding:12,borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
-                        <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+                      <div key={key} style={{
+                        padding: showImportReview ? 12 : 12,
+                        borderRadius: showImportReview ? 14 : 14,
+                        background: showImportReview ? '#ffffff' : C.glass,
+                        border: showImportReview ? '1px solid rgba(17,24,39,0.08)' : `1px solid ${C.glassBd}`,
+                        boxShadow: showImportReview ? '0 8px 24px rgba(17,24,39,0.06)' : 'none',
+                      }}>
+                        <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
+                          <div style={{position:'relative',width:64,height:64,flexShrink:0}}>
+                            <img src={sourceThumb || 'https://placehold.co/72x72?text=Spot'} alt=""
+                              style={{width:64,height:64,borderRadius:14,objectFit:'cover',border:'1px solid rgba(17,24,39,0.08)'}} />
+                            <div style={{
+                              position:'absolute',right:-6,bottom:-6,
+                              width:22,height:22,borderRadius:'50%',
+                              background:'#111827',color:'#ffffff',
+                              display:'flex',alignItems:'center',justifyContent:'center',
+                              fontSize:11,fontWeight:900,
+                              border:'2px solid #ffffff',
+                            }}>{idx + 1}</div>
+                          </div>
+                          <div style={{minWidth:0,flex:1}}>
+                            <div style={{color: showImportReview ? '#111827' : 'white',fontWeight:900,fontSize:15,marginBottom:6}}>{place.name}</div>
+                            <div style={{display:'flex',alignItems:'center',gap:8,color:'#6b7280',fontSize:12,fontWeight:800,marginBottom:8}}>
+                              <span style={{display:'inline-flex',alignItems:'center',gap:6}}>
+                                <span aria-hidden="true" style={{color: pinColor}}>📍</span>
+                                {place.type || 'place'}
+                              </span>
+                              {place.confidence != null ? (
+                                <span style={{color:'#9ca3af',fontWeight:700}}>
+                                  · {Math.round((place.confidence || 0) * 100)}% match
+                                </span>
+                              ) : null}
+                            </div>
+                            {descPreview ? (
+                              <div style={{color:'#6b7280',fontSize:12,lineHeight:1.45,marginBottom: showImportReview ? 0 : 10}}>
+                                {descPreview}
+                              </div>
+                            ) : null}
+                          </div>
                           <button type="button" onClick={()=>togglePlacePicked(key)}
-                            style={{marginTop:2,width:20,height:20,borderRadius:'50%',border:`1px solid ${C.biolume}`,
-                              background:selectedPlaceKeys[key] ? C.biolume : 'transparent',color:selectedPlaceKeys[key] ? C.deep : C.biolume,
-                              cursor:'pointer',fontWeight:900,fontSize:12,flexShrink:0}}>
+                            aria-label={selectedPlaceKeys[key] ? 'Deselect place' : 'Select place'}
+                            style={{
+                              marginTop:4,
+                              width:28,height:28,borderRadius:'50%',
+                              border:'2px solid #2563eb',
+                              background: selectedPlaceKeys[key] ? '#2563eb' : '#ffffff',
+                              color: selectedPlaceKeys[key] ? '#ffffff' : 'transparent',
+                              cursor:'pointer',fontWeight:900,fontSize:14,flexShrink:0,
+                              display:'flex',alignItems:'center',justifyContent:'center',
+                            }}>
                             {selectedPlaceKeys[key] ? '✓' : ''}
                           </button>
-                          <img src={sourceThumb || 'https://placehold.co/72x72?text=Spot'} alt=""
-                            style={{width:54,height:54,borderRadius:10,objectFit:'cover',border:`1px solid ${C.glassBd}`,flexShrink:0}} />
-                          <div style={{minWidth:0,flex:1}}>
-                            <div style={{color:'white',fontWeight:800,fontSize:14,marginBottom:4}}>{place.name}</div>
-                            <div style={{color:C.textSec,fontSize:11,marginBottom:10}}>
-                              {place.type}
-                              {place.confidence != null ? ` · ${Math.round((place.confidence || 0) * 100)}% match` : ''}
-                            </div>
+                        </div>
+                        {!showImportReview ? (
+                          <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center',marginTop:10}}>
+                            <button
+                              type="button"
+                              data-testid={idx === 0 ? 'addspots-add-to-map' : undefined}
+                              disabled={!!st}
+                              onClick={() => {
+                                onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint });
+                                setAddedPlaces((a) => ({ ...a, [key]: 'map' }));
+                              }}
+                              style={{
+                                padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:st?'default':'pointer',
+                                border:`1px solid ${C.biolume}`,background:st==='map'?'rgba(0,229,212,0.25)':'rgba(0,229,212,0.12)',
+                                color:C.biolume,opacity:st&&st!=='map'?0.5:1,
+                              }}
+                            >{st === 'map' ? 'On map ✓' : 'Add to map'}</button>
+                            <select
+                              data-testid={idx === 0 ? 'addspots-list-select' : undefined}
+                              value={getListPick(idx)}
+                              onChange={(e) => setListPickByIdx((p) => ({ ...p, [idx]: e.target.value }))}
+                              style={{
+                                padding:'8px 10px',borderRadius:10,background:'rgba(255,255,255,0.08)',
+                                border:`1px solid ${C.glassBd}`,color:'white',fontSize:12,maxWidth:160,
+                              }}
+                            >
+                              {userLists.length === 0 ? (
+                                <option value="">Create a list first</option>
+                              ) : (
+                                <>
+                                  <option value="">Select list…</option>
+                                  {userLists.map((l) => (
+                                    <option key={l.id} value={l.id}>{l.name}</option>
+                                  ))}
+                                </>
+                              )}
+                            </select>
+                            <button
+                              type="button"
+                              data-testid={idx === 0 ? 'addspots-add-to-list' : undefined}
+                              disabled={!!st || !getListPick(idx) || userLists.length === 0}
+                              onClick={() => {
+                                const lid = getListPick(idx);
+                                if (!lid) return;
+                                onAddPlaceToList(
+                                  { name: place.name, destinationHint: extractPlacesInfo.destinationHint },
+                                  lid,
+                                );
+                                setAddedPlaces((a) => ({ ...a, [key]: 'list' }));
+                              }}
+                              style={{
+                                padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:st?'default':'pointer',
+                                border:`1px solid ${C.glassBd}`,background:st==='list'?'rgba(255,184,77,0.2)':C.glass,
+                                color:st==='list'?C.amber:'white',
+                              }}
+                            >{st === 'list' ? 'In list ✓' : 'Add to list'}</button>
                           </div>
-                        </div>
-                        <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>
-                          <button
-                            type="button"
-                            data-testid={idx === 0 ? 'addspots-add-to-map' : undefined}
-                            disabled={!!st}
-                            onClick={() => {
-                              onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint });
-                              setAddedPlaces((a) => ({ ...a, [key]: 'map' }));
-                            }}
-                            style={{
-                              padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:st?'default':'pointer',
-                              border:`1px solid ${C.biolume}`,background:st==='map'?'rgba(0,229,212,0.25)':'rgba(0,229,212,0.12)',
-                              color:C.biolume,opacity:st&&st!=='map'?0.5:1,
-                            }}
-                          >{st === 'map' ? 'On map ✓' : 'Add to map'}</button>
-                          <select
-                            data-testid={idx === 0 ? 'addspots-list-select' : undefined}
-                            value={getListPick(idx)}
-                            onChange={(e) => setListPickByIdx((p) => ({ ...p, [idx]: e.target.value }))}
-                            style={{
-                              padding:'8px 10px',borderRadius:10,background:'rgba(255,255,255,0.08)',
-                              border:`1px solid ${C.glassBd}`,color:'white',fontSize:12,maxWidth:160,
-                            }}
-                          >
-                            {userLists.length === 0 ? (
-                              <option value="">Create a list first</option>
-                            ) : (
-                              <>
-                                <option value="">Select list…</option>
-                                {userLists.map((l) => (
-                                  <option key={l.id} value={l.id}>{l.name}</option>
-                                ))}
-                              </>
-                            )}
-                          </select>
-                          <button
-                            type="button"
-                            data-testid={idx === 0 ? 'addspots-add-to-list' : undefined}
-                            disabled={!!st || !getListPick(idx) || userLists.length === 0}
-                            onClick={() => {
-                              const lid = getListPick(idx);
-                              if (!lid) return;
-                              onAddPlaceToList(
-                                { name: place.name, destinationHint: extractPlacesInfo.destinationHint },
-                                lid,
-                              );
-                              setAddedPlaces((a) => ({ ...a, [key]: 'list' }));
-                            }}
-                            style={{
-                              padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:st?'default':'pointer',
-                              border:`1px solid ${C.glassBd}`,background:st==='list'?'rgba(255,184,77,0.2)':C.glass,
-                              color:st==='list'?C.amber:'white',
-                            }}
-                          >{st === 'list' ? 'In list ✓' : 'Add to list'}</button>
-                        </div>
+                        ) : null}
                       </div>
                     );
                   })}
                 </div>
-                <div style={{marginTop:12,padding:12,borderRadius:14,background:'rgba(0,229,212,0.06)',border:`1px solid rgba(0,229,212,0.2)`}}>
-                  <div style={{color:C.textSec,fontSize:11,marginBottom:8}}>
-                    Selected: <span style={{color:'white',fontWeight:800}}>{selectedPlaces.length}</span> spot(s)
+                {showImportReview ? (
+                  <button
+                    type="button"
+                    onClick={() => { setShowImportReview(false); setExtractEntry('links'); }}
+                    style={{
+                      marginTop:12,width:'100%',padding:12,borderRadius:14,
+                      border:'1px dashed rgba(17,24,39,0.22)',
+                      background:'#ffffff',color:'#111827',fontWeight:900,fontSize:13,cursor:'pointer',
+                    }}
+                  >
+                    + Add more spots
+                  </button>
+                ) : null}
+                <div style={{
+                  marginTop:12,
+                  padding: showImportReview ? 12 : 12,
+                  borderRadius: showImportReview ? 16 : 14,
+                  background: showImportReview ? '#ffffff' : 'rgba(0,229,212,0.06)',
+                  border: showImportReview ? '1px solid rgba(17,24,39,0.08)' : `1px solid rgba(0,229,212,0.2)`,
+                  boxShadow: showImportReview ? '0 12px 34px rgba(17,24,39,0.08)' : 'none',
+                }}>
+                  <div style={{color: showImportReview ? '#6b7280' : C.textSec,fontSize:12,marginBottom:10,fontWeight:700}}>
+                    Selected: <span style={{color: showImportReview ? '#111827' : 'white',fontWeight:900}}>{selectedPlaces.length}</span> spot(s)
                   </div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
-                    <button type="button" onClick={saveSelectedToMap} disabled={selectedPlaces.length===0}
-                      style={{padding:'10px 12px',borderRadius:10,border:`1px solid ${C.biolume}`,background:'rgba(0,229,212,0.12)',
-                        color:C.biolume,fontWeight:800,fontSize:12,cursor:selectedPlaces.length?'pointer':'default',opacity:selectedPlaces.length?1:0.45}}>
-                      Save Spots to Map
+                  <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                    <button type="button" onClick={()=>saveSelectedToList(bulkListId)}
+                      disabled={selectedPlaces.length===0 || userLists.length===0 || !bulkListId}
+                      style={{
+                        flex: showImportReview ? '1 1 160px' : '0 1 auto',
+                        padding:'12px 14px',borderRadius:14,
+                        border:'1px solid rgba(17,24,39,0.12)',
+                        background:'#f3f4f6',color:'#111827',
+                        fontWeight:900,fontSize:13,
+                        cursor:selectedPlaces.length&&userLists.length&&bulkListId?'pointer':'not-allowed',
+                        opacity:selectedPlaces.length&&userLists.length&&bulkListId?1:0.45,
+                        display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+                      }}>
+                      <span aria-hidden="true">☰</span>
+                      Add to List
                     </button>
+                    <button type="button" onClick={saveSelectedToMap} disabled={selectedPlaces.length===0}
+                      style={{
+                        flex: showImportReview ? '1 1 200px' : '0 1 auto',
+                        padding:'12px 14px',borderRadius:14,
+                        border:'none',
+                        background:'#111827',color:'#ffffff',
+                        fontWeight:900,fontSize:13,
+                        cursor:selectedPlaces.length?'pointer':'not-allowed',
+                        opacity:selectedPlaces.length?1:0.45,
+                        display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+                      }}>
+                      <span aria-hidden="true">⬇</span>
+                      Save Spots
+                    </button>
+                  </div>
+                  <div style={{display:'flex',gap:10,marginTop:10,alignItems:'center',flexWrap:'wrap'}}>
                     <select value={bulkListId} onChange={(e)=>setBulkListId(e.target.value)}
-                      style={{padding:'10px 10px',borderRadius:10,background:'rgba(255,255,255,0.08)',border:`1px solid ${C.glassBd}`,color:'white',fontSize:12,maxWidth:180}}>
+                      style={{
+                        flex:1,minWidth:160,
+                        padding:'10px 12px',borderRadius:12,
+                        background: showImportReview ? '#ffffff' : 'rgba(255,255,255,0.08)',
+                        border: showImportReview ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                        color: showImportReview ? '#111827' : 'white',
+                        fontSize:12,fontWeight:700,
+                      }}>
                       {userLists.length === 0 ? <option value="">No list yet</option> : (
                         <>
                           <option value="">Select list…</option>
@@ -2535,19 +2806,23 @@ function AddSpotsSheet({
                         </>
                       )}
                     </select>
-                    <button type="button" onClick={()=>saveSelectedToList(bulkListId)}
-                      disabled={selectedPlaces.length===0 || userLists.length===0 || !bulkListId}
-                      style={{padding:'10px 12px',borderRadius:10,border:`1px solid ${C.glassBd}`,background:C.glass,color:'white',fontWeight:800,fontSize:12,
-                        cursor:selectedPlaces.length&&userLists.length&&bulkListId?'pointer':'default',opacity:selectedPlaces.length&&userLists.length&&bulkListId?1:0.45}}>
-                      Add to List
-                    </button>
-                  </div>
-                  <div style={{display:'flex',gap:8}}>
                     <input value={newListName} onChange={(e)=>setNewListName(e.target.value)} placeholder="New list name"
-                      style={{flex:1,padding:'10px 12px',borderRadius:10,background:'rgba(255,255,255,0.08)',border:`1px solid ${C.glassBd}`,color:'white',fontSize:12}} />
+                      style={{
+                        flex:1,minWidth:160,
+                        padding:'10px 12px',borderRadius:12,
+                        background: showImportReview ? '#ffffff' : 'rgba(255,255,255,0.08)',
+                        border: showImportReview ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                        color: showImportReview ? '#111827' : 'white',
+                        fontSize:12,fontWeight:700,
+                      }} />
                     <button type="button" onClick={createListAndSave} disabled={!newListName.trim() || selectedPlaces.length===0}
-                      style={{padding:'10px 12px',borderRadius:10,border:'none',background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
-                        fontWeight:900,fontSize:12,cursor:newListName.trim()&&selectedPlaces.length?'pointer':'default',opacity:newListName.trim()&&selectedPlaces.length?1:0.45}}>
+                      style={{
+                        padding:'10px 12px',borderRadius:12,border:'none',
+                        background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
+                        fontWeight:900,fontSize:12,
+                        cursor:newListName.trim()&&selectedPlaces.length?'pointer':'not-allowed',
+                        opacity:newListName.trim()&&selectedPlaces.length?1:0.45,
+                      }}>
                       New List + Save
                     </button>
                   </div>
@@ -2555,9 +2830,17 @@ function AddSpotsSheet({
               </>
             )}
             <details style={{marginTop:12}}>
-              <summary style={{color:C.textMut,fontSize:11,cursor:'pointer'}}>Raw JSON</summary>
-              <pre style={{marginTop:8,padding:10,borderRadius:10,background:'rgba(0,0,0,0.25)',color:C.textMut,
-                fontSize:10,overflow:'auto',maxHeight:120,whiteSpace:'pre-wrap'}}>
+              <summary style={{
+                color: showImportReview ? '#6b7280' : C.textMut,
+                fontSize:11,cursor:'pointer',
+              }}>Raw JSON</summary>
+              <pre style={{
+                marginTop:8,padding:10,borderRadius:10,
+                background: showImportReview ? '#ffffff' : 'rgba(0,0,0,0.25)',
+                border: showImportReview ? '1px solid rgba(17,24,39,0.08)' : 'none',
+                color: showImportReview ? '#6b7280' : C.textMut,
+                fontSize:10,overflow:'auto',maxHeight:120,whiteSpace:'pre-wrap',
+              }}>
                 {JSON.stringify(extractJson, null, 2)}
               </pre>
             </details>
@@ -3446,8 +3729,10 @@ function MainApp({ onSignOut }) {
     });
   };
 
-  const addPlaceToList = (place, listId) => {
-    const list = userLists.find((l) => l.id === listId);
+  const addPlaceToList = (place, listId, listMeta) => {
+    const list =
+      userLists.find((l) => l.id === listId) ||
+      (listMeta && listMeta.id === listId ? listMeta : null);
     if (!list) return;
     const finish = (lat, lng, locLabel) => {
       const sid = `u-${Date.now()}`;
@@ -3458,7 +3743,7 @@ function MainApp({ onSignOut }) {
           name: place.name,
           loc: locLabel || place.destinationHint || 'Saved',
           emoji: '🍽️',
-          color: list.color,
+          color: list.color || C.biolume,
           listId,
           lat,
           lng,
