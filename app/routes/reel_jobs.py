@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -55,6 +56,16 @@ def _proxy_url_allowed(url: str) -> bool:
     return _proxy_host_allowed(p.hostname or "")
 
 
+def _ssl_context_for_proxy() -> ssl.SSLContext | None:
+    """Use certifi CA bundle when available (fixes macOS / minimal Python SSL)."""
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return None
+
+
 def _fetch_proxy_image(url: str) -> tuple[bytes, str]:
     req = Request(
         url,
@@ -64,8 +75,12 @@ def _fetch_proxy_image(url: str) -> tuple[bytes, str]:
         },
         method="GET",
     )
+    open_kw: dict = {"timeout": 20}
+    ctx = _ssl_context_for_proxy()
+    if ctx is not None:
+        open_kw["context"] = ctx
     try:
-        with urlopen(req, timeout=20) as resp:  # noqa: S310 — URL allowlisted above
+        with urlopen(req, **open_kw) as resp:  # noqa: S310 — URL allowlisted above
             ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             data = resp.read(_MAX_PROXY_IMAGE_BYTES + 1)
     except HTTPError as e:
