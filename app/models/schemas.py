@@ -120,3 +120,27 @@ class ReviseTripRequest(BaseModel):
     revision_request: str
     trip_constraints: Optional[TripConstraints] = None
     candidate_places: List[CandidatePlace]
+
+
+# ---- Link import schemas ----------------------------------------------------
+
+class ImportLinksRequest(BaseModel):
+    urls: List[str] = Field(..., min_length=1)
+
+
+class ImportedPost(BaseModel):
+    post_id: str
+    url: str
+    platform: Literal["tiktok", "instagram", "other"]
+    caption: str = ""
+    transcript: str = ""
+    ocr_text: str = ""
+    thumbnail_text: str = ""
+    raw_text: str
+    creator: str = ""
+    thumbnail_url: str = ""
+
+
+class ImportLinksResponse(BaseModel):
+    imported: List[ImportedPost]
+    skipped: List[str] = []
