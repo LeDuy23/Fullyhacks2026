@@ -1,0 +1,1406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepDive — Explore the Deep</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBxaupRfVWOQ7gK4j0220kYQ3a4ofNPZfQ"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;height:100%;overflow:hidden}
+body{font-family:'Nunito',sans-serif;background:#04080f;}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:rgba(255,255,255,0.03)}
+::-webkit-scrollbar-thumb{background:rgba(0,229,212,0.3);border-radius:99px}
+input{font-family:'Nunito',sans-serif}
+button{font-family:'Nunito',sans-serif;cursor:pointer;border:none;background:none}
+/* Hide Google Maps attribution clutter */
+.gm-style .gm-style-cc{display:none}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ─── COLOR TOKENS ─── */
+const C = {
+  depth:'#04080f', deep:'#060e1c', navy:'#0a1628', ocean:'#0d2040',
+  mid:'#103060', biolume:'#00e5d4', biolumeB:'#00fff2', coral:'#ff6e7a',
+  amber:'#ffb84d', seafoam:'#6fd8be', text:'#ffffff',
+  textSec:'rgba(255,255,255,0.65)', textMut:'rgba(255,255,255,0.35)',
+  glass:'rgba(255,255,255,0.06)', glassBr:'rgba(255,255,255,0.1)',
+  glassBd:'rgba(255,255,255,0.13)', glassCard:'rgba(8,22,50,0.7)',
+};
+
+/* ─── MASCOT SVGs ─── */
+function OllieOctopus({size=120, expression='happy', hat=true}) {
+  return (
+    <svg width={size} height={size*1.1} viewBox="0 0 100 110" fill="none">
+      {hat && <>
+        <ellipse cx="50" cy="28" rx="22" ry="5" fill="#0a2a3a" opacity="0.6"/>
+        <rect x="32" y="10" width="36" height="20" rx="4" fill="#0d3d52"/>
+        <rect x="28" y="28" width="44" height="6" rx="3" fill="#0d4a60"/>
+        <rect x="43" y="8" width="14" height="4" rx="2" fill="#00e5d4"/>
+      </>}
+      <ellipse cx="50" cy="52" rx="26" ry="24" fill="url(#olliebody)"/>
+      <ellipse cx="50" cy="52" rx="26" ry="24" fill="url(#ollieglow)" opacity="0.3"/>
+      <circle cx="42" cy="48" r="7" fill="white"/>
+      <circle cx="58" cy="48" r="7" fill="white"/>
+      <circle cx="43.5" cy="48.5" r="4" fill="#0a1628"/>
+      <circle cx="59.5" cy="48.5" r="4" fill="#0a1628"/>
+      <circle cx="45" cy="47" r="1.5" fill="white"/>
+      <circle cx="61" cy="47" r="1.5" fill="white"/>
+      {expression==='happy' && <path d="M43 57 Q50 63 57 57" stroke="#0a1628" strokeWidth="2" strokeLinecap="round" fill="none"/>}
+      {expression==='excited' && <path d="M42 57 Q50 65 58 57" stroke="#0a1628" strokeWidth="2.5" strokeLinecap="round" fill="none"/>}
+      {expression==='thinking' && <path d="M44 58 Q50 61 56 58" stroke="#0a1628" strokeWidth="2" strokeLinecap="round" fill="none"/>}
+      {[[-20,0],[-14,8],[-6,14],[4,16],[14,14],[22,8],[26,0],[20,-6]].map(([dx,dy],i)=>(
+        <path key={i} d={`M${50+dx*0.3} ${70+dy*0.2} Q${50+dx*0.8} ${80+dy} ${50+dx} ${95+dy*0.5}`}
+          stroke="url(#tentaGrad)" strokeWidth="5" strokeLinecap="round" fill="none" opacity="0.9"/>
+      ))}
+      <defs>
+        <radialGradient id="olliebody" cx="40%" cy="35%">
+          <stop offset="0%" stopColor="#3a7bd5"/><stop offset="100%" stopColor="#1a3a8a"/>
+        </radialGradient>
+        <radialGradient id="ollieglow" cx="50%" cy="50%">
+          <stop offset="0%" stopColor="#00e5d4"/><stop offset="100%" stopColor="transparent"/>
+        </radialGradient>
+        <linearGradient id="tentaGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#2a5bc4"/><stop offset="100%" stopColor="#1a2a6a"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
+
+function FinnShark({size=100}) {
+  return (
+    <svg width={size} height={size*0.85} viewBox="0 0 100 85" fill="none">
+      <path d="M10 55 Q30 20 65 35 Q85 42 90 55 Q80 75 50 72 Q20 70 10 55Z" fill="url(#sharkbody)"/>
+      <path d="M55 35 L62 10 L72 38Z" fill="#8ab4cc"/>
+      <path d="M80 50 Q95 45 90 55Z" fill="#8ab4cc"/>
+      <path d="M30 72 L22 82 L40 72Z" fill="#8ab4cc"/>
+      <path d="M55 72 L50 82 L65 72Z" fill="#8ab4cc"/>
+      <circle cx="75" cy="47" r="6" fill="white"/>
+      <circle cx="76.5" cy="47.5" r="3.5" fill="#0a1628"/>
+      <circle cx="77.5" cy="46.5" r="1" fill="white"/>
+      <path d="M68 57 Q75 63 82 57" stroke="white" strokeWidth="2" strokeLinecap="round" fill="none"/>
+      <path d="M70 60 L68 57 L72 58" fill="white"/>
+      <path d="M80 60 L82 57 L78 58" fill="white"/>
+      <ellipse cx="45" cy="38" rx="8" ry="5" fill="white" opacity="0.15"/>
+      <defs>
+        <linearGradient id="sharkbody" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#6ab0d4"/><stop offset="100%" stopColor="#2a6a94"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
+
+function CoralFish({size=90}) {
+  return (
+    <svg width={size} height={size*0.85} viewBox="0 0 90 76" fill="none">
+      <ellipse cx="44" cy="40" rx="28" ry="22" fill="#ff7043"/>
+      <path d="M16 40 L2 25 L5 40 L2 55Z" fill="#ff7043"/>
+      <ellipse cx="44" cy="40" rx="28" ry="22" fill="none" stroke="white" strokeWidth="4"/>
+      <line x1="44" y1="18" x2="44" y2="62" stroke="white" strokeWidth="4"/>
+      <ellipse cx="62" cy="35" rx="7" ry="10" fill="#ff5722" opacity="0.7" transform="rotate(20,62,35)"/>
+      <ellipse cx="64" cy="48" rx="7" ry="10" fill="#ff5722" opacity="0.7" transform="rotate(-20,64,48)"/>
+      <circle cx="62" cy="35" r="8" fill="white"/>
+      <circle cx="63.5" cy="35" r="5" fill="#0a1628"/>
+      <circle cx="65" cy="33.5" r="1.5" fill="white"/>
+      <path d="M57 43 Q63 48 68 43" stroke="#0a1628" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+    </svg>
+  );
+}
+
+function PearlPuffer({size=90}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 90 90" fill="none">
+      <circle cx="45" cy="48" r="30" fill="url(#puffbody)"/>
+      {[0,30,60,90,120,150,180,210,240,270,300,330].map((a,i)=>(
+        <ellipse key={i} cx={45+28*Math.cos(a*Math.PI/180)} cy={48+28*Math.sin(a*Math.PI/180)} rx="5" ry="4"
+          fill="#e8a030" transform={`rotate(${a},${45+28*Math.cos(a*Math.PI/180)},${48+28*Math.sin(a*Math.PI/180)})`}/>
+      ))}
+      <circle cx="37" cy="42" r="8" fill="white"/>
+      <circle cx="53" cy="42" r="8" fill="white"/>
+      <circle cx="38" cy="43" r="5" fill="#0a1628"/>
+      <circle cx="54" cy="43" r="5" fill="#0a1628"/>
+      <circle cx="39.5" cy="41.5" r="1.5" fill="white"/>
+      <circle cx="55.5" cy="41.5" r="1.5" fill="white"/>
+      <path d="M39 53 Q45 58 51 53" stroke="#0a1628" strokeWidth="2" strokeLinecap="round" fill="none"/>
+      <ellipse cx="20" cy="50" rx="10" ry="6" fill="#e8a030" opacity="0.8" transform="rotate(-20,20,50)"/>
+      <ellipse cx="70" cy="50" rx="10" ry="6" fill="#e8a030" opacity="0.8" transform="rotate(20,70,50)"/>
+      <ellipse cx="45" cy="18" rx="8" ry="6" fill="#e8a030" opacity="0.8"/>
+      <defs>
+        <radialGradient id="puffbody" cx="40%" cy="35%">
+          <stop offset="0%" stopColor="#ffd060"/><stop offset="100%" stopColor="#e8820a"/>
+        </radialGradient>
+      </defs>
+    </svg>
+  );
+}
+
+function SeahorseGuide({size=80}) {
+  return (
+    <svg width={size} height={size*1.4} viewBox="0 0 80 112" fill="none">
+      <path d="M40 20 Q55 22 52 35 Q60 38 58 50 Q58 65 48 75 Q40 82 38 95 Q36 105 40 110" stroke="url(#seahorseGrad)" strokeWidth="10" strokeLinecap="round" fill="none"/>
+      <circle cx="40" cy="18" r="13" fill="url(#seahorseHead)"/>
+      <path d="M40 6 Q48 2 50 8" stroke="#4a90d9" strokeWidth="3" strokeLinecap="round" fill="none"/>
+      <circle cx="35" cy="15" r="4" fill="white"/>
+      <circle cx="35.5" cy="15.5" r="2.5" fill="#0a1628"/>
+      <circle cx="36.5" cy="14.5" r="0.8" fill="white"/>
+      <path d="M37 23 Q40 26 43 24" stroke="#0a1628" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+      {[35,45,55,65,75,85].map((y,i)=>(
+        <path key={i} d={`M${44+i*0.5} ${y} Q${58+i} ${y-4} ${56+i} ${y+4}`} stroke="#4a90d9" strokeWidth="3" strokeLinecap="round" fill="none" opacity="0.8"/>
+      ))}
+      <defs>
+        <linearGradient id="seahorseGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#4a90d9"/><stop offset="100%" stopColor="#1a3a8a"/>
+        </linearGradient>
+        <radialGradient id="seahorseHead" cx="40%" cy="40%">
+          <stop offset="0%" stopColor="#5a9de8"/><stop offset="100%" stopColor="#2a5ab0"/>
+        </radialGradient>
+      </defs>
+    </svg>
+  );
+}
+
+/* ─── GOOGLE MAPS ─── */
+function OceanMap({ mapRef: externalMapRef, onMarkerClick }) {
+  const containerRef = useRef(null);
+  const mapInstance = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current || mapInstance.current) return;
+
+    const map = new google.maps.Map(containerRef.current, {
+      center: { lat: 20, lng: 10 },
+      zoom: 2,
+      disableDefaultUI: true,
+      zoomControl: true,
+      zoomControlOptions: { position: google.maps.ControlPosition.BOTTOM_RIGHT },
+      gestureHandling: 'greedy',
+    });
+
+    const makeIcon = (color) => ({
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: 8,
+      fillColor: color || '#a78bfa',
+      fillOpacity: 1,
+      strokeColor: 'white',
+      strokeWeight: 2,
+    });
+
+    [
+      [13.5, 123.8, 'Coral Triangle', 1],
+      [4.2, 73.5, 'Maldives', 3],
+      [-18.3, 147.7, 'Great Barrier Reef', 2],
+      [7.9, 134.5, 'Palawan', null],
+      [-0.7, 130.9, 'Raja Ampat', null],
+      [17.3, -87.5, 'Blue Hole', null],
+    ].forEach(([lat, lng, name, tripId]) => {
+      const marker = new google.maps.Marker({
+        position: { lat, lng },
+        map,
+        icon: makeIcon('#a78bfa'),
+        title: name,
+      });
+
+      if (tripId) {
+        marker.addListener('click', () => {
+          if (onMarkerClick) onMarkerClick(tripId);
+        });
+      } else {
+        const info = new google.maps.InfoWindow({
+          content: `<b style="color:#a78bfa;font-family:Nunito,sans-serif">${name}</b>`,
+        });
+        marker.addListener('click', () => info.open(map, marker));
+      }
+    });
+
+    mapInstance.current = map;
+    if (externalMapRef) externalMapRef.current = map;
+
+    return () => {
+      mapInstance.current = null;
+      if (externalMapRef) externalMapRef.current = null;
+    };
+  }, []);
+
+  return (
+    <div ref={containerRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
+  );
+}
+
+/* ─── MASCOT BUBBLE ─── */
+function MascotBubble({mascot, message, style={}}) {
+  const mascots = {
+    ollie: <OllieOctopus size={72}/>,
+    finn: <FinnShark size={70}/>,
+    coral: <CoralFish size={68}/>,
+    pearl: <PearlPuffer size={68}/>,
+    seahorse: <SeahorseGuide size={60}/>,
+  };
+  return (
+    <div style={{display:'flex',alignItems:'flex-end',gap:12,...style}}>
+      <div style={{flexShrink:0}}>{mascots[mascot]||mascots.ollie}</div>
+      <div style={{background:'rgba(13,40,80,0.95)',border:'1px solid rgba(0,229,212,0.3)',
+        borderRadius:'18px 18px 18px 4px',padding:'10px 16px',backdropFilter:'blur(12px)',
+        maxWidth:220,boxShadow:'0 0 20px rgba(0,229,212,0.15)'}}>
+        <p style={{color:'white',fontSize:13,fontWeight:600,lineHeight:1.5,margin:0}}>{message}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ─── PROGRESS BAR ─── */
+function ProgressBar({step, total}) {
+  return (
+    <div style={{display:'flex',gap:6,padding:'0 24px'}}>
+      {Array.from({length:total}).map((_,i)=>(
+        <div key={i} style={{flex:1,height:4,borderRadius:99,overflow:'hidden',background:'rgba(255,255,255,0.1)'}}>
+          <div style={{width:i<step?'100%':'0%',height:'100%',
+            background:'linear-gradient(90deg,#00e5d4,#00a8ff)',
+            borderRadius:99,transition:'width 0.4s ease',boxShadow:'0 0 8px rgba(0,229,212,0.6)'}}/>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ─── ONBOARDING ─── */
+function OnboardAgeScreen({onNext, onBack}) {
+  const [sel, setSel] = useState(null);
+  const opts = ['18–24','25–34','35–44','45–54','55+'];
+  return (
+    <div style={{height:'100%',display:'flex',flexDirection:'column',padding:'24px 24px 32px',
+      background:`linear-gradient(160deg,${C.deep},${C.navy})`}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <button onClick={onBack} style={{color:C.textSec,fontSize:14,fontWeight:700}}>← Back</button>
+        <ProgressBar step={1} total={3}/>
+        <button style={{color:C.biolume,fontSize:14,fontWeight:700}}>Skip</button>
+      </div>
+      <MascotBubble mascot="ollie" message="Let me personalize your deep sea adventure! 🐙" style={{marginBottom:24}}/>
+      <h2 style={{color:'white',fontSize:28,fontWeight:900,marginBottom:6}}>How old are you?</h2>
+      <p style={{color:C.textSec,fontSize:14,marginBottom:24}}>We'll tailor your exploration experience</p>
+      <div style={{display:'flex',flexDirection:'column',gap:10,flex:1,overflowY:'auto'}}>
+        {opts.map(o=>(
+          <button key={o} onClick={()=>setSel(o)} style={{
+            display:'flex',justifyContent:'space-between',alignItems:'center',
+            padding:'16px 18px',borderRadius:16,textAlign:'left',
+            background:sel===o?'rgba(0,229,212,0.12)':C.glass,
+            border:`1.5px solid ${sel===o?C.biolume:C.glassBd}`,
+            color:'white',fontSize:16,fontWeight:700,transition:'all 0.2s',
+            boxShadow:sel===o?'0 0 20px rgba(0,229,212,0.2)':'none',cursor:'pointer',
+          }}>
+            <span>{o}</span>
+            <div style={{width:22,height:22,borderRadius:'50%',border:`2px solid ${sel===o?C.biolume:C.glassBd}`,
+              background:sel===o?C.biolume:'none',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              {sel===o && <div style={{width:10,height:10,borderRadius:'50%',background:C.deep}}/>}
+            </div>
+          </button>
+        ))}
+      </div>
+      <button onClick={()=>sel&&onNext()} style={{
+        marginTop:20,padding:'16px',borderRadius:16,fontSize:16,fontWeight:800,
+        background:sel?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.1)',
+        color:sel?C.deep:'rgba(255,255,255,0.3)',transition:'all 0.3s',
+        boxShadow:sel?'0 0 30px rgba(0,229,212,0.4)':'none',cursor:sel?'pointer':'default',
+      }}>Continue →</button>
+    </div>
+  );
+}
+
+function OnboardTripScreen({onNext, onBack}) {
+  const [sel, setSel] = useState(null);
+  const opts = [
+    {id:'yes',icon:<FinnShark size={52}/>,title:"Yes, I have an expedition!",sub:"I'm ready to chart my course"},
+    {id:'no',icon:<OllieOctopus size={52} hat={false}/>,title:"Not yet, just exploring",sub:"I'm discovering the depths"},
+  ];
+  return (
+    <div style={{height:'100%',display:'flex',flexDirection:'column',padding:'24px 24px 32px',
+      background:`linear-gradient(160deg,${C.deep},${C.navy})`}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <button onClick={onBack} style={{color:C.textSec,fontSize:14,fontWeight:700}}>← Back</button>
+        <ProgressBar step={2} total={3}/>
+        <button style={{color:C.biolume,fontSize:14,fontWeight:700}}>Skip</button>
+      </div>
+      <h2 style={{color:'white',fontSize:28,fontWeight:900,marginBottom:6}}>Do you have an adventure coming up?</h2>
+      <p style={{color:C.textSec,fontSize:14,marginBottom:32}}>We'll personalize your experience 🌊</p>
+      <div style={{display:'flex',flexDirection:'column',gap:14,flex:1}}>
+        {opts.map(o=>(
+          <button key={o.id} onClick={()=>setSel(o.id)} style={{
+            display:'flex',alignItems:'center',gap:16,padding:'20px',borderRadius:20,textAlign:'left',
+            background:sel===o.id?'rgba(0,229,212,0.1)':C.glass,
+            border:`1.5px solid ${sel===o.id?C.biolume:C.glassBd}`,
+            boxShadow:sel===o.id?'0 0 24px rgba(0,229,212,0.15)':'none',transition:'all 0.2s',cursor:'pointer',
+          }}>
+            <div style={{flexShrink:0}}>{o.icon}</div>
+            <div style={{flex:1}}>
+              <div style={{color:'white',fontSize:16,fontWeight:800}}>{o.title}</div>
+              <div style={{color:C.textSec,fontSize:13,marginTop:3}}>{o.sub}</div>
+            </div>
+            <div style={{width:22,height:22,borderRadius:'50%',border:`2px solid ${sel===o.id?C.biolume:C.glassBd}`,
+              background:sel===o.id?C.biolume:'none',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              {sel===o.id && <div style={{width:10,height:10,borderRadius:'50%',background:C.deep}}/>}
+            </div>
+          </button>
+        ))}
+      </div>
+      <button onClick={()=>sel&&onNext()} style={{
+        padding:'16px',borderRadius:16,fontSize:16,fontWeight:800,
+        background:sel?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.1)',
+        color:sel?C.deep:'rgba(255,255,255,0.3)',transition:'all 0.3s',
+        boxShadow:sel?'0 0 30px rgba(0,229,212,0.4)':'none',cursor:sel?'pointer':'default',
+      }}>Continue →</button>
+    </div>
+  );
+}
+
+function OnboardStyleScreen({onNext, onBack}) {
+  const [sel, setSel] = useState(new Set());
+  const opts = [
+    {id:'pins',icon:<CoralFish size={48}/>,label:'Drop pins on the map',sub:'Mark your dive spots'},
+    {id:'list',icon:<PearlPuffer size={48}/>,label:'Build a treasure list',sub:'Collect hidden gems'},
+    {id:'guides',icon:<FinnShark size={48}/>,label:'Follow guide routes',sub:'Swim with the experts'},
+    {id:'wing',icon:<SeahorseGuide size={48}/>,label:'I just drift with the current',sub:'Spontaneous explorer'},
+  ];
+  const toggle = (id) => setSel(s=>{const n=new Set(s);n.has(id)?n.delete(id):n.add(id);return n;});
+  return (
+    <div style={{height:'100%',display:'flex',flexDirection:'column',padding:'24px 24px 32px',
+      background:`linear-gradient(160deg,${C.deep},${C.navy})`}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <button onClick={onBack} style={{color:C.textSec,fontSize:14,fontWeight:700}}>← Back</button>
+        <ProgressBar step={3} total={3}/>
+        <button style={{color:C.biolume,fontSize:14,fontWeight:700}}>Skip</button>
+      </div>
+      <h2 style={{color:'white',fontSize:28,fontWeight:900,marginBottom:6}}>How do you explore?</h2>
+      <p style={{color:C.textSec,fontSize:14,marginBottom:24}}>Select all that apply 🐠</p>
+      <div style={{display:'flex',flexDirection:'column',gap:10,flex:1,overflowY:'auto'}}>
+        {opts.map(o=>{
+          const on = sel.has(o.id);
+          return (
+            <button key={o.id} onClick={()=>toggle(o.id)} style={{
+              display:'flex',alignItems:'center',gap:14,padding:'14px 18px',borderRadius:16,textAlign:'left',
+              background:on?'rgba(0,229,212,0.1)':C.glass,
+              border:`1.5px solid ${on?C.biolume:C.glassBd}`,
+              boxShadow:on?'0 0 20px rgba(0,229,212,0.15)':'none',transition:'all 0.2s',cursor:'pointer',
+            }}>
+              <div style={{flexShrink:0,width:56,height:48,display:'flex',alignItems:'center',justifyContent:'center'}}>{o.icon}</div>
+              <div style={{flex:1}}>
+                <div style={{color:'white',fontSize:15,fontWeight:800}}>{o.label}</div>
+                <div style={{color:C.textSec,fontSize:12,marginTop:2}}>{o.sub}</div>
+              </div>
+              <div style={{width:22,height:22,borderRadius:6,border:`2px solid ${on?C.biolume:C.glassBd}`,
+                background:on?C.biolume:'none',display:'flex',alignItems:'center',justifyContent:'center',
+                flexShrink:0,transition:'all 0.2s'}}>
+                {on && <svg width="12" height="9" viewBox="0 0 12 9"><path d="M1 4l3 3 7-6" stroke={C.deep} strokeWidth="2.5" strokeLinecap="round" fill="none"/></svg>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <button onClick={()=>onNext()} style={{
+        marginTop:20,padding:'16px',borderRadius:16,fontSize:16,fontWeight:800,
+        background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
+        boxShadow:'0 0 30px rgba(0,229,212,0.4)',cursor:'pointer',
+      }}>Let's Go →</button>
+    </div>
+  );
+}
+
+/* ─── TRIP DATA ─── */
+const TRIPS = [
+  {id:1,title:'Coral Triangle Dive',loc:'Indonesia',days:5,spots:12,color:'#ff6e7a',
+    center:[1.4748,124.8421],zoom:13,
+    pins:[[1.4748,124.8421,'Bunaken National Park'],[1.5012,124.8563,'Mandolin Reef'],
+      [1.4523,124.8234,'Lekuan I'],[1.4890,124.8678,'Fukui Point'],[1.4650,124.8100,"Ron's Point"]]},
+  {id:2,title:'Great Barrier Reef',loc:'Australia',days:3,spots:8,color:'#00e5d4',
+    center:[-16.9186,145.7781],zoom:13,
+    pins:[[-16.9186,145.7781,'Cairns City Reef'],[-16.8912,145.7923,'Agincourt Reef'],
+      [-16.9450,145.7600,'Flynn Reef'],[-16.8700,145.8100,'Michaelmas Cay'],[-16.9800,145.7400,'Thetford Reef']]},
+  {id:3,title:'Maldives Expedition',loc:'Maldives',days:7,spots:15,color:'#ffd060',
+    center:[4.1755,73.5093],zoom:13,
+    pins:[[4.1755,73.5093,'Malé City Reef'],[4.1900,73.5200,'Banana Reef'],
+      [4.1600,73.4900,'HP Reef'],[4.2100,73.5400,'Rasfari'],[4.1400,73.4800,'Manta Point']]},
+];
+
+const ALL_DESTINATIONS = [
+  {name:'Tokyo',country:'Japan',flag:'🇯🇵'},{name:'Paris',country:'France',flag:'🇫🇷'},
+  {name:'New York',country:'USA',flag:'🇺🇸'},{name:'London',country:'UK',flag:'🇬🇧'},
+  {name:'Rome',country:'Italy',flag:'🇮🇹'},{name:'Barcelona',country:'Spain',flag:'🇪🇸'},
+  {name:'Bali',country:'Indonesia',flag:'🇮🇩'},{name:'Bangkok',country:'Thailand',flag:'🇹🇭'},
+  {name:'Dubai',country:'UAE',flag:'🇦🇪'},{name:'Sydney',country:'Australia',flag:'🇦🇺'},
+  {name:'Maldives',country:'Maldives',flag:'🇲🇻'},{name:'Santorini',country:'Greece',flag:'🇬🇷'},
+  {name:'Palawan',country:'Philippines',flag:'🇵🇭'},{name:'Galápagos',country:'Ecuador',flag:'🇪🇨'},
+  {name:'Great Barrier Reef',country:'Australia',flag:'🇦🇺'},{name:'Raja Ampat',country:'Indonesia',flag:'🇮🇩'},
+  {name:'Cancún',country:'Mexico',flag:'🇲🇽'},{name:'Phuket',country:'Thailand',flag:'🇹🇭'},
+  {name:'Cape Town',country:'South Africa',flag:'🇿🇦'},{name:'Lisbon',country:'Portugal',flag:'🇵🇹'},
+  {name:'Amsterdam',country:'Netherlands',flag:'🇳🇱'},{name:'Prague',country:'Czech Republic',flag:'🇨🇿'},
+  {name:'Istanbul',country:'Turkey',flag:'🇹🇷'},{name:'Marrakech',country:'Morocco',flag:'🇲🇦'},
+  {name:'Kyoto',country:'Japan',flag:'🇯🇵'},{name:'Singapore',country:'Singapore',flag:'🇸🇬'},
+  {name:'Hong Kong',country:'China',flag:'🇭🇰'},{name:'Seoul',country:'South Korea',flag:'🇰🇷'},
+  {name:'Miami',country:'USA',flag:'🇺🇸'},{name:'Rio de Janeiro',country:'Brazil',flag:'🇧🇷'},
+  {name:'Buenos Aires',country:'Argentina',flag:'🇦🇷'},{name:'Cairo',country:'Egypt',flag:'🇪🇬'},
+  {name:'Nairobi',country:'Kenya',flag:'🇰🇪'},{name:'Vienna',country:'Austria',flag:'🇦🇹'},
+  {name:'Zurich',country:'Switzerland',flag:'🇨🇭'},{name:'Copenhagen',country:'Denmark',flag:'🇩🇰'},
+  {name:'Helsinki',country:'Finland',flag:'🇫🇮'},{name:'Oslo',country:'Norway',flag:'🇳🇴'},
+  {name:'Edinburgh',country:'UK',flag:'🇬🇧'},{name:'Dubrovnik',country:'Croatia',flag:'🇭🇷'},
+  {name:'Amalfi Coast',country:'Italy',flag:'🇮🇹'},{name:'Nice',country:'France',flag:'🇫🇷'},
+  {name:'Havana',country:'Cuba',flag:'🇨🇺'},{name:'Petra',country:'Jordan',flag:'🇯🇴'},
+  {name:'Machu Picchu',country:'Peru',flag:'🇵🇪'},{name:'Queenstown',country:'New Zealand',flag:'🇳🇿'},
+  {name:'Vancouver',country:'Canada',flag:'🇨🇦'},{name:'Los Angeles',country:'USA',flag:'🇺🇸'},
+  {name:'San Francisco',country:'USA',flag:'🇺🇸'},{name:'Chicago',country:'USA',flag:'🇺🇸'},
+];
+
+/* ─── PLAN TRIP PANEL ─── */
+function PlanTripPanel({onClose, onDone}) {
+  const [dest, setDest] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [showCal, setShowCal] = useState(false);
+  const [calMonth, setCalMonth] = useState(()=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth(),1);});
+  const [interests, setInterests] = useState(new Set());
+  const [showAll, setShowAll] = useState(false);
+  const fmt = (d) => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+  const intOpts = ['🤿 Diving','🐠 Snorkeling','🏖️ Beaches','🦈 Wildlife','🍣 Food','🎨 Culture','⛵ Sailing'];
+
+  return (
+    <div style={{height:'100%',display:'flex',flexDirection:'column',background:`linear-gradient(180deg,${C.navy},${C.deep})`}}>
+      <div style={{padding:'20px 20px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',
+        borderBottom:`1px solid ${C.glassBd}`}}>
+        <div>
+          <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1}}>New Trip</div>
+          <div style={{color:'white',fontSize:20,fontWeight:900,marginTop:2}}>Where to?</div>
+        </div>
+        <button onClick={onClose} style={{color:C.textSec,fontSize:22,lineHeight:1}}>✕</button>
+      </div>
+      <div style={{flex:1,overflowY:'auto',padding:'20px'}}>
+        <div style={{position:'relative',marginBottom:12}}>
+          <div style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',fontSize:18}}>🔍</div>
+          <input value={dest} onChange={e=>setDest(e.target.value)} placeholder="Search destinations..."
+            style={{width:'100%',padding:'14px 14px 14px 44px',borderRadius:14,
+              background:'rgba(255,255,255,0.07)',border:`1.5px solid ${C.glassBd}`,
+              color:'white',fontSize:15,outline:'none',boxSizing:'border-box'}}/>
+        </div>
+        <div style={{padding:'14px 16px',borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`,
+          display:'flex',alignItems:'center',gap:12,marginBottom:20,cursor:'pointer'}}>
+          <PearlPuffer size={44}/>
+          <div>
+            <div style={{color:'white',fontWeight:800,fontSize:14}}>Import from my Lists</div>
+            <div style={{color:C.textSec,fontSize:12}}>Pull spots from your saved lists</div>
+          </div>
+          <div style={{marginLeft:'auto',color:C.biolume,fontSize:18}}>›</div>
+        </div>
+        <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>
+          {dest ? '🔍 Results' : '🔥 Popular Destinations'}
+        </div>
+        {(() => {
+          const filtered = dest
+            ? ALL_DESTINATIONS.filter(t=>t.name.toLowerCase().includes(dest.toLowerCase())||t.country.toLowerCase().includes(dest.toLowerCase()))
+            : ALL_DESTINATIONS;
+          const visible = (dest || showAll) ? filtered : filtered.slice(0,6);
+          return (<>
+            {visible.map(t=>(
+              <div key={t.name} onClick={()=>setDest(t.name)} style={{
+                display:'flex',alignItems:'center',gap:12,padding:'12px 16px',borderRadius:12,cursor:'pointer',
+                background:dest===t.name?'rgba(0,229,212,0.1)':'transparent',
+                border:`1px solid ${dest===t.name?C.biolume:'transparent'}`,
+                marginBottom:4,transition:'all 0.2s'}}>
+                <div style={{fontSize:28}}>{t.flag}</div>
+                <div>
+                  <div style={{color:'white',fontWeight:700,fontSize:15}}>{t.name}</div>
+                  <div style={{color:C.textSec,fontSize:12}}>{t.country}</div>
+                </div>
+              </div>
+            ))}
+            {!dest && !showAll && filtered.length>6 && (
+              <button onClick={()=>setShowAll(true)} style={{
+                display:'flex',alignItems:'center',justifyContent:'center',gap:6,
+                width:'100%',padding:'12px',borderRadius:12,marginTop:4,
+                background:'transparent',border:`1px dashed ${C.glassBd}`,
+                color:C.biolume,fontSize:13,fontWeight:700,cursor:'pointer'}}>
+                See {filtered.length-6} more ↓
+              </button>
+            )}
+            {!dest && showAll && (
+              <button onClick={()=>setShowAll(false)} style={{
+                display:'flex',alignItems:'center',justifyContent:'center',gap:6,
+                width:'100%',padding:'12px',borderRadius:12,marginTop:4,
+                background:'transparent',border:`1px dashed ${C.glassBd}`,
+                color:C.textSec,fontSize:13,fontWeight:700,cursor:'pointer'}}>
+                Show less ↑
+              </button>
+            )}
+          </>);
+        })()}
+        {/* Date picker */}
+        <div onClick={()=>setShowCal(!showCal)} style={{
+          marginTop:16,padding:'14px 16px',borderRadius:14,background:C.glass,
+          border:`1px solid ${showCal?C.biolume:C.glassBd}`,
+          display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',transition:'all 0.2s'}}>
+          <span style={{color:'white',fontWeight:600}}>📅 When</span>
+          <span style={{color:C.biolume,fontWeight:700,fontSize:14}}>
+            {dateFrom&&dateTo?`${fmt(dateFrom)} → ${fmt(dateTo)}`:dateFrom?`${fmt(dateFrom)} → …`:'Add dates'}
+          </span>
+        </div>
+        {showCal && (() => {
+          const y=calMonth.getFullYear(), m=calMonth.getMonth();
+          const first=new Date(y,m,1).getDay();
+          const days=new Date(y,m+1,0).getDate();
+          const today=new Date(); today.setHours(0,0,0,0);
+          const cells = [];
+          for(let i=0;i<first;i++) cells.push(null);
+          for(let d=1;d<=days;d++) cells.push(new Date(y,m,d));
+          const pick = (d) => {
+            if(!d||d<today) return;
+            const t=d.getTime();
+            if(!dateFrom||(dateFrom&&dateTo)){setDateFrom(t);setDateTo('');}
+            else if(t<dateFrom){setDateFrom(t);}
+            else{setDateTo(t);}
+          };
+          return (
+            <div style={{marginTop:8,padding:'16px',borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                <button onClick={()=>setCalMonth(new Date(y,m-1,1))} style={{background:'none',border:'none',color:C.biolume,fontSize:20,cursor:'pointer',padding:4}}>‹</button>
+                <div style={{color:'white',fontWeight:800,fontSize:15}}>{calMonth.toLocaleString('en-US',{month:'long',year:'numeric'})}</div>
+                <button onClick={()=>setCalMonth(new Date(y,m+1,1))} style={{background:'none',border:'none',color:C.biolume,fontSize:20,cursor:'pointer',padding:4}}>›</button>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:4}}>
+                {['S','M','T','W','T','F','S'].map((d,i)=>(
+                  <div key={i} style={{textAlign:'center',color:C.textMut,fontSize:11,fontWeight:700,padding:'4px 0'}}>{d}</div>
+                ))}
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2}}>
+                {cells.map((d,i)=>{
+                  if(!d) return <div key={i}/>;
+                  const t=d.getTime();
+                  const isPast=d<today;
+                  const isFrom=dateFrom===t, isTo=dateTo===t;
+                  const inRange=dateFrom&&dateTo&&t>dateFrom&&t<dateTo;
+                  const selected=isFrom||isTo;
+                  return (
+                    <div key={i} onClick={()=>pick(d)} style={{
+                      aspectRatio:'1',display:'flex',alignItems:'center',justifyContent:'center',
+                      fontSize:13,fontWeight:selected?800:600,
+                      color:isPast?C.textMut:selected?C.deep:inRange?C.biolume:'white',
+                      background:selected?C.biolume:inRange?'rgba(0,229,212,0.15)':'transparent',
+                      borderRadius:isFrom&&dateTo?'8px 0 0 8px':isTo?'0 8px 8px 0':inRange?'0':'8px',
+                      cursor:isPast?'default':'pointer',opacity:isPast?0.35:1,transition:'all 0.15s',
+                    }}>{d.getDate()}</div>
+                  );
+                })}
+              </div>
+              {(dateFrom||dateTo) && (
+                <button onClick={()=>{setDateFrom('');setDateTo('');}} style={{
+                  marginTop:10,width:'100%',padding:8,borderRadius:10,
+                  background:'transparent',border:`1px solid ${C.glassBd}`,
+                  color:C.textSec,fontSize:12,fontWeight:700,cursor:'pointer'}}>Clear dates</button>
+              )}
+            </div>
+          );
+        })()}
+        {/* Interests */}
+        <div style={{marginTop:12}}>
+          <div style={{padding:'14px 16px',borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`,
+            display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',marginBottom:8}}>
+            <span style={{color:'white',fontWeight:600}}>🎯 Preferences</span>
+            <span style={{color:C.biolume,fontWeight:700,fontSize:14}}>Add interests</span>
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+            {intOpts.map(i=>{
+              const on=interests.has(i);
+              return (
+                <button key={i} onClick={()=>setInterests(s=>{const n=new Set(s);n.has(i)?n.delete(i):n.add(i);return n;})}
+                  style={{padding:'7px 14px',borderRadius:99,fontSize:13,fontWeight:700,cursor:'pointer',transition:'all 0.2s',
+                    background:on?C.biolume:C.glass,color:on?C.deep:'white',
+                    border:`1px solid ${on?C.biolume:C.glassBd}`,
+                    boxShadow:on?'0 0 12px rgba(0,229,212,0.3)':'none'}}>{i}</button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      <div style={{padding:'16px 20px',borderTop:`1px solid ${C.glassBd}`}}>
+        <button onClick={()=>dest&&onDone()} style={{
+          width:'100%',padding:'16px',borderRadius:14,fontSize:16,fontWeight:800,cursor:'pointer',
+          background:dest?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.08)',
+          color:dest?C.deep:'rgba(255,255,255,0.3)',border:'none',transition:'all 0.3s',
+          boxShadow:dest?'0 0 30px rgba(0,229,212,0.35)':'none',
+        }}>🗺️ Plan This Trip</button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── TRIP DETAIL ─── */
+function TripDetail({trip, onBack}) {
+  const [tab, setTab] = useState('overview');
+  return (
+    <div style={{height:'100%',display:'flex',flexDirection:'column',background:`linear-gradient(180deg,${C.navy},${C.deep})`}}>
+      <div style={{padding:'20px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <button onClick={onBack} style={{background:C.glass,border:`1px solid ${C.glassBd}`,borderRadius:99,
+          padding:'8px 14px',color:'white',fontWeight:700,fontSize:14,cursor:'pointer'}}>← Back</button>
+        <button style={{background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,border:'none',borderRadius:99,
+          padding:'8px 16px',color:C.deep,fontWeight:800,fontSize:13,cursor:'pointer'}}>💾 Save Trip</button>
+      </div>
+      {/* Mini map placeholder */}
+      <div style={{margin:'0 20px',height:160,borderRadius:18,overflow:'hidden',position:'relative',
+        background:`linear-gradient(135deg,${C.ocean},${C.mid})`,border:`1px solid ${C.glassBd}`}}>
+        <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{color:C.biolume,opacity:0.3,fontSize:80}}>🗺️</div>
+        </div>
+        {[{x:'25%',y:'40%'},{x:'45%',y:'35%'},{x:'60%',y:'55%'},{x:'75%',y:'45%'}].map((p,i)=>(
+          <div key={i} style={{position:'absolute',left:p.x,top:p.y,transform:'translate(-50%,-50%)'}}>
+            <div style={{width:24,height:24,borderRadius:'50%',background:C.biolume,display:'flex',alignItems:'center',
+              justifyContent:'center',fontSize:11,fontWeight:800,color:C.deep,
+              boxShadow:'0 0 12px rgba(0,229,212,0.6)'}}>{i+1}</div>
+          </div>
+        ))}
+        <div style={{position:'absolute',top:'50%',left:'25%',right:'30%',height:2,
+          background:`linear-gradient(90deg,${C.biolume},transparent)`,opacity:0.5}}/>
+      </div>
+      {/* Info */}
+      <div style={{margin:'16px 20px 0',padding:'16px',borderRadius:18,background:C.glass,border:`1px solid ${C.glassBd}`}}>
+        <div style={{display:'flex',gap:14,marginBottom:12}}>
+          <div style={{width:60,height:60,borderRadius:14,
+            background:`linear-gradient(135deg,${trip.color}44,${trip.color}22)`,
+            display:'flex',alignItems:'center',justifyContent:'center',fontSize:28}}>🌊</div>
+          <div>
+            <div style={{color:'white',fontWeight:900,fontSize:17}}>{trip.title}</div>
+            <div style={{color:C.textSec,fontSize:13,marginTop:3}}>{trip.days} days · {trip.spots} dive spots</div>
+            <div style={{display:'flex',alignItems:'center',gap:6,marginTop:6}}>
+              <OllieOctopus size={22} hat={false}/>
+              <span style={{color:C.biolume,fontSize:12,fontWeight:700}}>DeepDive Team</span>
+            </div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          {['overview','unplanned','day 1'].map(t=>(
+            <button key={t} onClick={()=>setTab(t)} style={{
+              padding:'8px 14px',borderRadius:99,fontSize:13,fontWeight:700,cursor:'pointer',transition:'all 0.2s',
+              background:tab===t?'white':C.glass,color:tab===t?C.deep:'white',
+              border:`1px solid ${tab===t?'white':C.glassBd}`,
+            }}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>
+          ))}
+        </div>
+      </div>
+      {tab==='overview' && (
+        <div style={{margin:'12px 20px',padding:'16px',borderRadius:16,background:C.glass,border:`1px solid ${C.glassBd}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+            <div style={{background:C.biolume,color:C.deep,borderRadius:99,padding:'4px 12px',fontSize:12,fontWeight:800}}>Day 1</div>
+            <span style={{color:C.textSec,fontSize:12}}>{trip.loc} · {trip.spots} spots</span>
+          </div>
+          <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:4}}>
+            {Array.from({length:5}).map((_,i)=>(
+              <div key={i} style={{width:52,height:52,borderRadius:10,
+                background:`linear-gradient(135deg,${C.mid},${C.ocean})`,
+                flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>
+                {['🐠','🦈','🐙','🦑','🐡'][i]}
+              </div>
+            ))}
+            <div style={{width:52,height:52,borderRadius:10,background:C.glass,border:`1px solid ${C.glassBd}`,
+              flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
+              color:C.textSec,fontWeight:700,fontSize:13}}>+{trip.spots-5}</div>
+          </div>
+        </div>
+      )}
+      <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+        <MascotBubble mascot="finn" message={`Ready to explore ${trip.loc}? Let's dive in! 🦈`}/>
+      </div>
+    </div>
+  );
+}
+
+/* ─── ADD SPOTS SHEET ─── */
+function AddSpotsSheet({onClose}) {
+  const cardBase = {
+    padding:'18px',borderRadius:18,textAlign:'left',cursor:'pointer',
+    background:C.glass,border:`1px solid ${C.glassBd}`,transition:'all 0.25s',
+    backdropFilter:'blur(12px)',
+  };
+  const hoverIn = e => {
+    e.currentTarget.style.border=`1px solid ${C.biolume}`;
+    e.currentTarget.style.background='rgba(0,229,212,0.08)';
+    e.currentTarget.style.boxShadow='0 0 24px rgba(0,229,212,0.18)';
+    e.currentTarget.style.transform='translateY(-2px)';
+  };
+  const hoverOut = e => {
+    e.currentTarget.style.border=`1px solid ${C.glassBd}`;
+    e.currentTarget.style.background=C.glass;
+    e.currentTarget.style.boxShadow='none';
+    e.currentTarget.style.transform='none';
+  };
+  const titleStyle = {color:'white',fontWeight:800,fontSize:15,marginBottom:4};
+  const subStyle = {color:C.textSec,fontSize:12,lineHeight:1.4};
+  return (
+    <div style={{padding:'24px 20px',background:`linear-gradient(180deg,${C.navy},${C.deep})`,height:'100%',display:'flex',flexDirection:'column',overflowY:'auto'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:22}}>
+        <h3 style={{color:'white',fontSize:20,fontWeight:900,letterSpacing:-0.3}}>Add Spots</h3>
+        <button onClick={onClose} style={{width:32,height:32,borderRadius:'50%',background:C.glass,
+          border:`1px solid ${C.glassBd}`,color:C.textSec,fontSize:18,cursor:'pointer',
+          display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+      </div>
+      <MascotBubble mascot="coral" message="I know all the best spots! Where did you find yours? 🐠" style={{marginBottom:18}}/>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+          <div style={{display:'flex',alignItems:'center',marginBottom:14,height:40}}>
+            <div style={{width:40,height:40,borderRadius:10,background:'#000',display:'flex',alignItems:'center',
+              justifyContent:'center',position:'relative',zIndex:2,boxShadow:`0 0 0 1px ${C.glassBd}`}}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path d="M16 8.5v7a4 4 0 1 1-4-4" stroke="#fff" strokeWidth="2.2" strokeLinecap="round"/>
+                <path d="M16 3c0 2.5 2 4.5 4.5 4.5" stroke="#25F4EE" strokeWidth="2.2" strokeLinecap="round"/>
+                <path d="M15 3c0 2.5 2 4.5 4.5 4.5" stroke="#FE2C55" strokeWidth="2.2" strokeLinecap="round"/>
+                <path d="M15.5 3v7" stroke="#fff" strokeWidth="2.2" strokeLinecap="round"/>
+              </svg>
+            </div>
+            <div style={{width:36,height:36,borderRadius:9,marginLeft:-8,
+              background:'linear-gradient(135deg,#FEDA77,#F58529,#DD2A7B,#8134AF)',
+              display:'flex',alignItems:'center',justifyContent:'center',boxShadow:`0 0 0 1px ${C.glassBd}`}}>
+              <div style={{width:20,height:20,borderRadius:5,border:'2px solid white',position:'relative'}}>
+                <div style={{width:7,height:7,borderRadius:'50%',border:'2px solid white',position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)'}}/>
+                <div style={{width:3,height:3,borderRadius:'50%',background:'white',position:'absolute',top:1,right:1}}/>
+              </div>
+            </div>
+          </div>
+          <div style={titleStyle}>Social Search</div>
+          <div style={subStyle}>Search TikTok &amp; Instagram in-app</div>
+        </button>
+        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+          <div style={{width:40,height:40,borderRadius:10,background:'rgba(0,229,212,0.12)',
+            border:`1px solid rgba(0,229,212,0.25)`,
+            display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14}}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"
+                stroke={C.biolume} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+          <div style={titleStyle}>Paste any URL</div>
+          <div style={subStyle}>Articles, blogs, TikTok, Instagram &amp; more</div>
+        </button>
+        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+          <div style={{width:40,height:40,borderRadius:10,background:'linear-gradient(135deg,#ffad4a,#ff8a3a)',
+            display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14,
+            boxShadow:'0 2px 12px rgba(255,138,58,0.35)'}}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M5 4h11l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" fill="white"/>
+              <path d="M16 4v4h4" stroke="#ff8a3a" strokeWidth="1.5" fill="#ffd9a8"/>
+            </svg>
+          </div>
+          <div style={titleStyle}>Notes</div>
+          <div style={subStyle}>Paste your list</div>
+        </button>
+        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+          <div style={{width:40,height:40,borderRadius:10,background:'linear-gradient(135deg,#60a5fa,#2aa3e0)',
+            display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14,
+            boxShadow:'0 2px 12px rgba(42,163,224,0.35)'}}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <rect x="4" y="4" width="16" height="16" rx="3" stroke="white" strokeWidth="2.2"/>
+              <rect x="8" y="8" width="8" height="8" rx="1" stroke="white" strokeWidth="2.2"/>
+            </svg>
+          </div>
+          <div style={titleStyle}>Screenshots</div>
+          <div style={subStyle}>Extract from images</div>
+        </button>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
+        <div style={{flex:1,height:1,background:C.glassBd}}/>
+        <span style={{color:C.textMut,fontSize:11,fontWeight:700,letterSpacing:1.2}}>OR ADD MANUALLY</span>
+        <div style={{flex:1,height:1,background:C.glassBd}}/>
+      </div>
+      <button style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+        background:C.glass,border:`1px solid ${C.glassBd}`,cursor:'pointer',transition:'all 0.2s',
+        backdropFilter:'blur(12px)'}}
+        onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+        <div style={{width:48,height:48,borderRadius:12,flexShrink:0,
+          background:`linear-gradient(135deg,rgba(0,229,212,0.2),rgba(0,229,212,0.1))`,
+          border:`1px solid rgba(0,229,212,0.3)`,
+          display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+            <path d="M12 22s-8-7.5-8-13a8 8 0 1 1 16 0c0 5.5-8 13-8 13z" stroke={C.biolume} strokeWidth="2" fill={`rgba(0,229,212,0.13)`}/>
+            <circle cx="12" cy="9" r="3" stroke={C.biolume} strokeWidth="2"/>
+          </svg>
+        </div>
+        <div style={{textAlign:'left'}}>
+          <div style={{color:'white',fontWeight:800,fontSize:15}}>Search Location</div>
+          <div style={{color:C.textSec,fontSize:12,marginTop:2}}>Find on the map</div>
+        </div>
+      </button>
+    </div>
+  );
+}
+
+/* ─── NEW LIST MODAL ─── */
+function NewListModal({onClose, onCreate}) {
+  const [name, setName] = useState('');
+  return (
+    <div style={{padding:'24px',background:`linear-gradient(180deg,${C.navy},${C.deep})`,height:'100%',
+      display:'flex',flexDirection:'column',alignItems:'center'}}>
+      <div style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+        <h3 style={{color:'white',fontSize:20,fontWeight:900}}>New List</h3>
+        <button onClick={onClose} style={{width:32,height:32,borderRadius:'50%',background:C.glass,
+          border:`1px solid ${C.glassBd}`,color:C.textSec,fontSize:18,cursor:'pointer',
+          display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+      </div>
+      <div style={{width:100,height:100,borderRadius:24,background:C.glass,border:`2px dashed ${C.glassBd}`,
+        display:'flex',alignItems:'center',justifyContent:'center',fontSize:36,marginBottom:24,cursor:'pointer',
+        flexDirection:'column',gap:4,color:C.textMut}}>
+        <span>🖼️</span><span style={{fontSize:11}}>+ cover</span>
+      </div>
+      <PearlPuffer size={72}/>
+      <p style={{color:C.textSec,fontSize:13,marginTop:8,marginBottom:20,textAlign:'center'}}>Pearl says: give your list a name! 📋</p>
+      <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Best Reefs in SE Asia"
+        style={{width:'100%',padding:'14px 18px',borderRadius:14,background:C.glass,
+          border:`1.5px solid ${name?C.biolume:C.glassBd}`,color:'white',fontSize:15,outline:'none',
+          boxSizing:'border-box',boxShadow:name?'0 0 16px rgba(0,229,212,0.15)':'none',transition:'all 0.3s'}}/>
+      <div style={{flex:1}}/>
+      <button onClick={()=>name&&onCreate(name)} style={{
+        width:'100%',padding:'16px',borderRadius:14,fontSize:16,fontWeight:800,
+        cursor:name?'pointer':'default',
+        background:name?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.08)',
+        color:name?C.deep:'rgba(255,255,255,0.3)',border:'none',transition:'all 0.3s',
+        boxShadow:name?'0 0 28px rgba(0,229,212,0.35)':'none',
+      }}>+ Create List</button>
+    </div>
+  );
+}
+
+/* ─── ACTION SHEET ─── */
+function ActionSheet({onClose, onAction}) {
+  const items = [
+    {id:'trip',icon:<FinnShark size={48}/>,label:'New Trip',sub:'Plan your next adventure'},
+    {id:'list',icon:<PearlPuffer size={48}/>,label:'New List',sub:'Collect your favorite spots'},
+    {id:'spots',icon:<CoralFish size={48}/>,label:'Add Spots',sub:'Save places you love'},
+  ];
+  return (
+    <div style={{position:'absolute',inset:0,background:'rgba(4,8,15,0.7)',backdropFilter:'blur(4px)',
+      display:'flex',flexDirection:'column',justifyContent:'flex-end',zIndex:50}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:`linear-gradient(180deg,${C.navy},${C.deep})`,
+        borderRadius:'24px 24px 0 0',border:`1px solid ${C.glassBd}`,padding:'24px 20px 32px'}}>
+        <div style={{display:'flex',justifyContent:'center',marginBottom:16}}>
+          <div style={{width:40,height:4,borderRadius:99,background:'rgba(255,255,255,0.2)'}}/>
+        </div>
+        {items.map(it=>(
+          <button key={it.id} onClick={()=>{onAction(it.id);onClose();}} style={{
+            width:'100%',display:'flex',alignItems:'center',gap:16,padding:'14px 16px',borderRadius:16,
+            background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10,cursor:'pointer',
+            transition:'all 0.2s'}}
+            onMouseEnter={e=>{e.currentTarget.style.background='rgba(0,229,212,0.1)';e.currentTarget.style.border=`1px solid ${C.biolume}`;}}
+            onMouseLeave={e=>{e.currentTarget.style.background=C.glass;e.currentTarget.style.border=`1px solid ${C.glassBd}`;}}>
+            <div style={{width:56,height:52,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{it.icon}</div>
+            <div style={{textAlign:'left'}}>
+              <div style={{color:'white',fontWeight:800,fontSize:16}}>{it.label}</div>
+              <div style={{color:C.textSec,fontSize:13,marginTop:2}}>{it.sub}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── SPOTS TAB ─── */
+function SpotsTab({onAddSpots}) {
+  const [filter, setFilter] = useState('All');
+  const [userLoc, setUserLoc] = useState(null);
+  const [geoState, setGeoState] = useState('idle');
+
+  const allSpots = [
+    {name:'Coral Gardens',loc:'Raja Ampat',emoji:'🐠',color:'#ff6e7a',list:'Favorites',lat:-0.7,lng:130.9},
+    {name:'Blue Hole',loc:'Belize',emoji:'🌀',color:'#00e5d4',list:'Bucket List',lat:17.3,lng:-87.5},
+    {name:'Manta Point',loc:'Komodo',emoji:'🦈',color:'#6fd8be',list:'Favorites',lat:-8.6,lng:119.5},
+    {name:'Cenote Dos Ojos',loc:'Mexico',emoji:'💧',color:'#a78bfa',list:'Bucket List',lat:20.3,lng:-87.4},
+    {name:'SS Thistlegorm',loc:'Egypt',emoji:'⚓',color:'#ffc277',list:'Wrecks',lat:27.8,lng:33.9},
+  ];
+  const lists = [
+    {name:'Favorites',icon:'⭐',count:2,color:'#ffc277'},
+    {name:'Bucket List',icon:'🌊',count:2,color:'#00e5d4'},
+    {name:'Wrecks',icon:'⚓',count:1,color:'#a78bfa'},
+  ];
+
+  const requestLoc = () => {
+    if(!navigator.geolocation){setGeoState('denied');return;}
+    setGeoState('loading');
+    navigator.geolocation.getCurrentPosition(
+      p=>{setUserLoc({lat:p.coords.latitude,lng:p.coords.longitude});setGeoState('ready');},
+      ()=>setGeoState('denied'),
+      {timeout:8000}
+    );
+  };
+
+  const haversine = (a,b) => {
+    const R=6371,toRad=d=>d*Math.PI/180;
+    const dLat=toRad(b.lat-a.lat),dLng=toRad(b.lng-a.lng);
+    const x=Math.sin(dLat/2)**2+Math.cos(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.sin(dLng/2)**2;
+    return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+  };
+
+  useEffect(()=>{ if(filter==='Nearby'&&geoState==='idle') requestLoc(); },[filter]);
+
+  const nearbySpots = userLoc ? [...allSpots]
+    .map(s=>({...s,km:Math.round(haversine(userLoc,{lat:s.lat,lng:s.lng}))}))
+    .sort((a,b)=>a.km-b.km) : [];
+
+  return (
+    <div style={{padding:'20px',overflowY:'auto',height:'100%',boxSizing:'border-box'}}>
+      <div style={{display:'flex',gap:8,marginBottom:20,alignItems:'center'}}>
+        <button style={{background:C.glass,border:`1px solid ${C.glassBd}`,borderRadius:99,
+          width:36,height:36,color:'white',fontSize:16,cursor:'pointer',
+          display:'flex',alignItems:'center',justifyContent:'center'}}>🔍</button>
+        {['All','Lists','Nearby'].map(t=>(
+          <button key={t} onClick={()=>setFilter(t)} style={{
+            padding:'8px 18px',borderRadius:99,fontSize:13,fontWeight:700,cursor:'pointer',
+            background:filter===t?'white':C.glass,color:filter===t?C.deep:'white',
+            border:`1px solid ${filter===t?'white':C.glassBd}`,
+            display:'flex',alignItems:'center',gap:6,transition:'all 0.2s'}}>
+            {t==='Lists'&&'🔖'}{t==='Nearby'&&'📍'}{t}
+          </button>
+        ))}
+      </div>
+      {filter==='Lists' ? (
+        <>
+          <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Your Lists</div>
+          {lists.map(l=>(
+            <div key={l.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+              background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10,cursor:'pointer'}}>
+              <div style={{width:46,height:46,borderRadius:12,background:`${l.color}22`,
+                display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>{l.icon}</div>
+              <div>
+                <div style={{color:'white',fontWeight:800,fontSize:15}}>{l.name}</div>
+                <div style={{color:C.textSec,fontSize:12,marginTop:2}}>{l.count} spots</div>
+              </div>
+              <div style={{marginLeft:'auto',color:C.biolume,fontSize:18}}>›</div>
+            </div>
+          ))}
+        </>
+      ) : filter==='Nearby' ? (
+        geoState==='loading' ? (
+          <div style={{textAlign:'center',padding:'40px 20px',color:C.textSec}}>
+            <div style={{fontSize:40,marginBottom:12}}>📡</div>
+            <div style={{fontWeight:700,color:'white'}}>Finding your location…</div>
+          </div>
+        ) : geoState==='denied' ? (
+          <div style={{textAlign:'center',padding:'40px 20px'}}>
+            <div style={{fontSize:40,marginBottom:12}}>📍</div>
+            <div style={{color:'white',fontWeight:800,fontSize:16}}>Share your location</div>
+            <div style={{color:C.textSec,fontSize:13,marginTop:8,marginBottom:20}}>Enable location to see spots sorted by distance from you.</div>
+            <button onClick={requestLoc} style={{padding:'12px 24px',borderRadius:99,background:C.biolume,
+              color:C.deep,fontWeight:800,border:'none',cursor:'pointer'}}>Enable Location</button>
+          </div>
+        ) : (
+          <>
+            <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>📍 Sorted by distance from you</div>
+            {nearbySpots.map(s=>(
+              <div key={s.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+                background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10}}>
+                <div style={{width:46,height:46,borderRadius:12,background:`${s.color}22`,
+                  display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>{s.emoji}</div>
+                <div style={{flex:1}}>
+                  <div style={{color:'white',fontWeight:800,fontSize:15}}>{s.name}</div>
+                  <div style={{color:C.textSec,fontSize:12,marginTop:2}}>📍 {s.loc}</div>
+                </div>
+                <div style={{color:C.biolume,fontSize:12,fontWeight:700}}>{s.km.toLocaleString()} km</div>
+              </div>
+            ))}
+          </>
+        )
+      ) : (
+        <>
+          {allSpots.map(s=>(
+            <div key={s.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+              background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10}}>
+              <div style={{width:46,height:46,borderRadius:12,background:`${s.color}22`,
+                display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>{s.emoji}</div>
+              <div>
+                <div style={{color:'white',fontWeight:800,fontSize:15}}>{s.name}</div>
+                <div style={{color:C.textSec,fontSize:12,marginTop:2}}>📍 {s.loc} · {s.list}</div>
+              </div>
+              <div style={{marginLeft:'auto',color:C.biolume,fontSize:18}}>›</div>
+            </div>
+          ))}
+        </>
+      )}
+      <button onClick={onAddSpots} style={{
+        display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+        width:'100%',padding:'14px',borderRadius:14,fontSize:15,fontWeight:800,marginTop:8,
+        background:`linear-gradient(135deg,rgba(0,229,212,0.15),rgba(0,160,233,0.1))`,
+        border:`1.5px solid ${C.biolume}`,color:C.biolume,cursor:'pointer',
+        boxShadow:'0 0 20px rgba(0,229,212,0.15)'}}>
+        + Add Dive Spots
+      </button>
+    </div>
+  );
+}
+
+/* ─── TRIPS TAB ─── */
+function TripsTab({trips, onPlan, onTripClick}) {
+  return (
+    <div style={{padding:'20px',overflowY:'auto',height:'100%',boxSizing:'border-box'}}>
+      {trips.length===0 ? (
+        <div style={{textAlign:'center',padding:'20px 0 24px'}}>
+          <div style={{fontSize:60,marginBottom:16}}>🌊</div>
+          <div style={{color:'white',fontWeight:900,fontSize:20,marginBottom:8}}>Great adventures start here</div>
+          <div style={{color:C.textSec,fontSize:14,marginBottom:24}}>Chart your first expedition.</div>
+          <MascotBubble mascot="finn" message="I'll help you find the best routes! 🦈" style={{justifyContent:'center'}}/>
+        </div>
+      ) : (
+        <>
+          <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:12}}>Your Expeditions</div>
+          {trips.map(t=>(
+            <div key={t.id} onClick={()=>onTripClick(t)} style={{
+              borderRadius:18,overflow:'hidden',marginBottom:12,cursor:'pointer',
+              background:`linear-gradient(135deg,${t.color}22,${C.glass})`,
+              border:`1px solid ${t.color}44`,padding:'16px',transition:'all 0.2s'}}
+              onMouseEnter={e=>{e.currentTarget.style.border=`1px solid ${t.color}99`;}}
+              onMouseLeave={e=>{e.currentTarget.style.border=`1px solid ${t.color}44`;}}>
+              <div style={{display:'flex',gap:12}}>
+                <div style={{width:50,height:50,borderRadius:12,background:`${t.color}33`,
+                  display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>🌊</div>
+                <div>
+                  <div style={{color:'white',fontWeight:800,fontSize:15}}>{t.title}</div>
+                  <div style={{color:C.textSec,fontSize:12,marginTop:3}}>{t.days} days · {t.spots} spots · {t.loc}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+      <button onClick={onPlan} style={{
+        display:'flex',alignItems:'center',justifyContent:'center',gap:10,
+        width:'100%',padding:'15px',borderRadius:14,fontSize:15,fontWeight:800,
+        background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
+        border:'none',cursor:'pointer',boxShadow:'0 0 28px rgba(0,229,212,0.3)',marginTop:8}}>
+        🗺️ Plan New Trip
+      </button>
+      <div style={{marginTop:24}}>
+        <div style={{color:'white',fontWeight:800,fontSize:16,marginBottom:12}}>Explore Guides</div>
+        <div style={{display:'flex',gap:12,overflowX:'auto',paddingBottom:8}}>
+          {[
+            {t:'Coral Triangle',d:'Indonesia',e:'🐠',c:'#ff6e7a'},
+            {t:'Pacific Ring',d:'Pacific',e:'🌋',c:'#ffb84d'},
+            {t:'Arctic Dive',d:'Norway',e:'🧊',c:'#00a0e9'},
+            {t:'Deep Blue',d:'Mariana',e:'🌊',c:'#00e5d4'},
+          ].map(g=>(
+            <div key={g.t} style={{minWidth:130,borderRadius:16,overflow:'hidden',flexShrink:0,cursor:'pointer',
+              background:`linear-gradient(145deg,${g.c}33,${C.ocean})`,border:`1px solid ${g.c}44`,padding:'14px'}}>
+              <div style={{fontSize:32,marginBottom:8}}>{g.e}</div>
+              <div style={{color:'white',fontWeight:800,fontSize:14,lineHeight:1.3}}>{g.t}</div>
+              <div style={{color:C.textSec,fontSize:11,marginTop:4}}>· {g.d}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── MAIN APP ─── */
+function MainApp() {
+  const [tab, setTab] = useState('trips');
+  const [panel, setPanel] = useState(null);
+  const [actionOpen, setActionOpen] = useState(false);
+  const [selectedTrip, setSelectedTrip] = useState(null);
+  const [trips, setTrips] = useState(TRIPS);
+
+  const sharedMapRef = useRef(null);
+  const tripMarkersRef = useRef([]);
+
+  const clearTripMarkers = () => {
+    tripMarkersRef.current.forEach(m => m.setMap(null));
+    tripMarkersRef.current = [];
+  };
+
+  const handleTripClick = (t) => {
+    setSelectedTrip(t);
+    setPanel('detail');
+    const map = sharedMapRef.current;
+    if (!map || !t.center) return;
+    clearTripMarkers();
+    map.panTo({ lat: t.center[0], lng: t.center[1] });
+    map.setZoom(t.zoom || 13);
+    setTimeout(() => {
+      if (!sharedMapRef.current) return;
+      t.pins.forEach(([lat, lng, name], i) => {
+        const marker = new google.maps.Marker({
+          position: { lat, lng },
+          map: sharedMapRef.current,
+          label: {
+            text: String(i + 1),
+            color: '#06101e',
+            fontWeight: '900',
+            fontSize: '13px',
+            fontFamily: 'Nunito, sans-serif',
+          },
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 15,
+            fillColor: t.color,
+            fillOpacity: 1,
+            strokeColor: 'white',
+            strokeWeight: 3,
+          },
+          title: name,
+        });
+        marker.addListener('click', () => { setSelectedTrip(t); setPanel('detail'); });
+        tripMarkersRef.current.push(marker);
+      });
+    }, 500);
+  };
+
+  const handleWorldMarkerClick = (tripId) => {
+    const t = trips.find(x => x.id === tripId);
+    if (t) { setTab('trips'); handleTripClick(t); }
+  };
+
+  const handleAction = (id) => {
+    if (id === 'trip') setPanel('plan');
+    if (id === 'list') setPanel('newlist');
+    if (id === 'spots') setPanel('addspots');
+  };
+
+  const handlePlanDone = () => {
+    setTrips(t => [...t, {id:Date.now(),title:'New Trip',loc:'Palawan, Philippines',days:4,spots:10,color:'#6fd8be'}]);
+    setPanel(null);
+  };
+
+  const handleBack = () => {
+    setPanel(null);
+    clearTripMarkers();
+    if (sharedMapRef.current) {
+      sharedMapRef.current.panTo({ lat: 20, lng: 10 });
+      sharedMapRef.current.setZoom(2);
+    }
+  };
+
+  return (
+    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',position:'relative',overflow:'hidden'}}>
+      {/* TOP NAV */}
+      <div style={{position:'relative',zIndex:10,display:'flex',alignItems:'center',justifyContent:'space-between',
+        padding:'14px 20px',background:'rgba(4,8,20,0.6)',backdropFilter:'blur(16px)',
+        borderBottom:`1px solid ${C.glassBd}`}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <OllieOctopus size={36} hat={true}/>
+          <div>
+            <div style={{color:C.biolume,fontWeight:900,fontSize:18,letterSpacing:'-0.5px'}}>DeepDive</div>
+            <div style={{color:C.textMut,fontSize:11}}>Explore the depths</div>
+          </div>
+        </div>
+        <div style={{flex:1,maxWidth:320,margin:'0 20px',position:'relative'}}>
+          <div style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',fontSize:16}}>🔍</div>
+          <input placeholder="Search ocean destinations..." style={{
+            width:'100%',padding:'10px 10px 10px 38px',borderRadius:12,
+            background:'rgba(255,255,255,0.07)',border:`1px solid ${C.glassBd}`,
+            color:'white',fontSize:14,outline:'none',boxSizing:'border-box'}}/>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <div style={{position:'relative',cursor:'pointer'}}>
+            <OllieOctopus size={36} hat={false}/>
+            <div style={{position:'absolute',top:-2,right:-2,width:14,height:14,borderRadius:'50%',
+              background:'#ff6e7a',display:'flex',alignItems:'center',justifyContent:'center',
+              fontSize:9,fontWeight:900,color:'white',boxShadow:'0 0 8px rgba(255,110,122,0.6)'}}>5</div>
+          </div>
+          <div style={{width:36,height:36,borderRadius:'50%',background:C.glassBr,border:`1px solid ${C.glassBd}`,
+            display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,cursor:'pointer'}}>👤</div>
+        </div>
+      </div>
+
+      {/* CONTENT AREA */}
+      <div style={{position:'relative',zIndex:5,flex:1,display:'flex',overflow:'hidden'}}>
+        {/* MAP */}
+        <div style={{flex:1,position:'relative',overflow:'hidden'}}>
+          <div style={{position:'absolute',inset:0,overflow:'hidden'}}>
+            <OceanMap mapRef={sharedMapRef} onMarkerClick={handleWorldMarkerClick}/>
+          </div>
+          <div style={{position:'absolute',bottom:30,left:'50%',transform:'translateX(-50%)',
+            background:'rgba(4,8,20,0.8)',border:`1px solid ${C.glassBd}`,borderRadius:99,
+            padding:'8px 16px',backdropFilter:'blur(10px)',color:C.textSec,fontSize:13,fontWeight:600,
+            display:'flex',alignItems:'center',gap:8,zIndex:10,pointerEvents:'none'}}>
+            <div style={{width:8,height:8,borderRadius:'50%',background:C.biolume,
+              boxShadow:`0 0 8px ${C.biolume}`,animation:'pulse 2s infinite'}}/>
+            Drag to explore the ocean
+          </div>
+        </div>
+
+        {/* RIGHT PANEL */}
+        <div style={{width:360,background:'rgba(6,14,28,0.88)',backdropFilter:'blur(20px)',
+          borderLeft:`1px solid ${C.glassBd}`,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+          {panel===null && <>
+            <div style={{display:'flex',borderBottom:`1px solid ${C.glassBd}`}}>
+              {['trips','spots'].map(t=>(
+                <button key={t} onClick={()=>setTab(t)} style={{
+                  flex:1,padding:'16px',fontWeight:800,fontSize:14,cursor:'pointer',
+                  background:'none',border:'none',color:tab===t?'white':C.textSec,
+                  borderBottom:`2px solid ${tab===t?C.biolume:'transparent'}`,
+                  textTransform:'capitalize',transition:'all 0.2s',
+                }}>{t==='trips'?'🌊 Expeditions':'🐠 Spots'}</button>
+              ))}
+            </div>
+            <div style={{flex:1,overflow:'hidden'}}>
+              {tab==='trips' && <TripsTab trips={trips} onPlan={()=>setPanel('plan')} onTripClick={handleTripClick}/>}
+              {tab==='spots' && <SpotsTab onAddSpots={()=>setPanel('addspots')}/>}
+            </div>
+          </>}
+          {panel==='plan' && <PlanTripPanel onClose={()=>setPanel(null)} onDone={handlePlanDone}/>}
+          {panel==='detail' && selectedTrip && <TripDetail trip={selectedTrip} onBack={handleBack}/>}
+          {panel==='addspots' && <AddSpotsSheet onClose={()=>setPanel(null)}/>}
+          {panel==='newlist' && <NewListModal onClose={()=>setPanel(null)} onCreate={()=>setPanel(null)}/>}
+        </div>
+      </div>
+
+      {/* FAB */}
+      <button onClick={()=>setActionOpen(v=>!v)} style={{
+        position:'absolute',bottom:24,right:24,zIndex:20,
+        width:56,height:56,borderRadius:'50%',
+        background:actionOpen?'#ff6e7a':`linear-gradient(135deg,${C.biolume},#00a0e9)`,
+        border:'none',fontSize:28,cursor:'pointer',transition:'all 0.3s',
+        boxShadow:`0 0 30px ${actionOpen?'rgba(255,110,122,0.4)':'rgba(0,229,212,0.5)'}`,
+        display:'flex',alignItems:'center',justifyContent:'center',
+        transform:actionOpen?'rotate(45deg)':'rotate(0deg)',
+      }}>+</button>
+
+      {actionOpen && <ActionSheet onClose={()=>setActionOpen(false)} onAction={handleAction}/>}
+
+      <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
+    </div>
+  );
+}
+
+/* ─── SPLASH SCREEN ─── */
+function SplashScreen({onStart}) {
+  return (
+    <div style={{height:'100%',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
+      background:'radial-gradient(ellipse at 50% 30%, #0d2a50 0%, #060e1c 50%, #04080f 100%)',
+      position:'relative',overflow:'hidden',padding:'40px'}}>
+      {Array.from({length:20}).map((_,i)=>(
+        <div key={i} style={{position:'absolute',
+          left:`${Math.random()*100}%`,top:`${Math.random()*100}%`,
+          width:3+Math.random()*4,height:3+Math.random()*4,borderRadius:'50%',
+          background:`rgba(0,229,212,${0.2+Math.random()*0.4})`,
+          boxShadow:'0 0 8px rgba(0,229,212,0.6)',
+          animation:`float${i%4} ${3+Math.random()*4}s ease-in-out infinite`,
+          animationDelay:`${Math.random()*4}s`}}/>
+      ))}
+      <OllieOctopus size={160}/>
+      <div style={{marginTop:24,textAlign:'center'}}>
+        <div style={{color:C.biolume,fontSize:13,fontWeight:700,letterSpacing:3,textTransform:'uppercase',marginBottom:8}}>Welcome to</div>
+        <div style={{color:'white',fontSize:52,fontWeight:900,letterSpacing:'-2px',
+          textShadow:'0 0 40px rgba(0,229,212,0.4)',lineHeight:1}}>DeepDive</div>
+        <div style={{color:C.textSec,fontSize:16,marginTop:10,fontWeight:600}}>Explore the ocean. Plan your adventure.</div>
+      </div>
+      <div style={{marginTop:32,display:'flex',flexDirection:'column',gap:12,width:'100%',maxWidth:320}}>
+        <button onClick={onStart} style={{
+          padding:'18px',borderRadius:18,fontSize:18,fontWeight:900,cursor:'pointer',
+          background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
+          border:'none',boxShadow:'0 0 40px rgba(0,229,212,0.4)',letterSpacing:'-0.5px'}}>
+          Get Started 🌊
+        </button>
+        <button style={{
+          padding:'14px',borderRadius:18,fontSize:15,fontWeight:700,cursor:'pointer',
+          background:'rgba(255,255,255,0.06)',color:C.textSec,
+          border:`1px solid ${C.glassBd}`}}>
+          Sign In
+        </button>
+      </div>
+      <div style={{marginTop:32,display:'flex',gap:24,alignItems:'center'}}>
+        <div style={{textAlign:'center'}}><FinnShark size={56}/><div style={{color:C.textMut,fontSize:11,marginTop:4}}>Finn</div></div>
+        <div style={{textAlign:'center'}}><CoralFish size={56}/><div style={{color:C.textMut,fontSize:11,marginTop:4}}>Coral</div></div>
+        <div style={{textAlign:'center'}}><PearlPuffer size={56}/><div style={{color:C.textMut,fontSize:11,marginTop:4}}>Pearl</div></div>
+        <div style={{textAlign:'center'}}><SeahorseGuide size={42}/><div style={{color:C.textMut,fontSize:11,marginTop:4}}>Shelby</div></div>
+      </div>
+      <style>{`
+        @keyframes float0{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+        @keyframes float1{0%,100%{transform:translateY(0)}50%{transform:translateY(-16px)}}
+        @keyframes float2{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+        @keyframes float3{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
+      `}</style>
+    </div>
+  );
+}
+
+/* ─── TWEAKS PANEL ─── */
+const TWEAK_DEFAULTS = { accentColor:'#6fd8be', showMascots:true, panelWidth:360 };
+
+function TweaksPanel({tweaks, onChange, onClose}) {
+  return (
+    <div style={{position:'fixed',bottom:80,right:24,zIndex:1000,background:'rgba(6,14,28,0.97)',
+      border:`1px solid ${C.glassBd}`,borderRadius:20,padding:'20px',width:260,
+      backdropFilter:'blur(20px)',boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <span style={{color:C.biolume,fontWeight:800,fontSize:14}}>Tweaks</span>
+        <button onClick={onClose} style={{color:C.textSec,fontSize:16,cursor:'pointer'}}>✕</button>
+      </div>
+      <div style={{marginBottom:12}}>
+        <label style={{color:C.textSec,fontSize:12,fontWeight:700,display:'block',marginBottom:6}}>Accent Color</label>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          {['#00e5d4','#ff6e7a','#ffb84d','#6fd8be','#a78bfa'].map(c=>(
+            <button key={c} onClick={()=>onChange({...tweaks,accentColor:c})} style={{
+              width:28,height:28,borderRadius:'50%',background:c,
+              border:`3px solid ${tweaks.accentColor===c?'white':'transparent'}`,cursor:'pointer'}}/>
+          ))}
+        </div>
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <span style={{color:C.textSec,fontSize:12,fontWeight:700}}>Show Mascots</span>
+        <button onClick={()=>onChange({...tweaks,showMascots:!tweaks.showMascots})} style={{
+          width:44,height:24,borderRadius:99,border:'none',cursor:'pointer',transition:'all 0.3s',
+          background:tweaks.showMascots?C.biolume:'rgba(255,255,255,0.15)',position:'relative'}}>
+          <div style={{position:'absolute',top:3,left:tweaks.showMascots?22:3,width:18,height:18,
+            borderRadius:'50%',background:'white',transition:'all 0.3s'}}/>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── ROOT APP ─── */
+function App() {
+  const savedScreen = localStorage.getItem('dd_screen') || 'splash';
+  const savedOnboard = parseInt(localStorage.getItem('dd_onboard') || '0');
+  const [screen, setScreen] = useState(savedScreen);
+  const [onboardStep, setOnboardStep] = useState(savedOnboard);
+  const [tweaks, setTweaks] = useState(TWEAK_DEFAULTS);
+  const [tweaksVisible, setTweaksVisible] = useState(false);
+
+  useEffect(() => { localStorage.setItem('dd_screen', screen); }, [screen]);
+  useEffect(() => { localStorage.setItem('dd_onboard', String(onboardStep)); }, [onboardStep]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.data?.type === '__activate_edit_mode') setTweaksVisible(true);
+      if (e.data?.type === '__deactivate_edit_mode') setTweaksVisible(false);
+    };
+    window.addEventListener('message', handler);
+    window.parent.postMessage({type:'__edit_mode_available'}, '*');
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  const handleTweakChange = (t) => {
+    setTweaks(t);
+    window.parent.postMessage({type:'__edit_mode_set_keys', edits:t}, '*');
+  };
+
+  const goOnboard = (step) => { setOnboardStep(step); setScreen('onboard'); };
+
+  return (
+    <div style={{width:'100vw',height:'100vh',overflow:'hidden',position:'relative'}}>
+      {screen==='splash' && <SplashScreen onStart={()=>goOnboard(1)}/>}
+      {screen==='onboard' && onboardStep===1 && <OnboardAgeScreen onNext={()=>setOnboardStep(2)} onBack={()=>setScreen('splash')}/>}
+      {screen==='onboard' && onboardStep===2 && <OnboardTripScreen onNext={()=>setOnboardStep(3)} onBack={()=>setOnboardStep(1)}/>}
+      {screen==='onboard' && onboardStep===3 && <OnboardStyleScreen onNext={()=>setScreen('app')} onBack={()=>setOnboardStep(2)}/>}
+      {screen==='app' && <MainApp/>}
+      {tweaksVisible && <TweaksPanel tweaks={tweaks} onChange={handleTweakChange} onClose={()=>setTweaksVisible(false)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
