@@ -71,6 +71,9 @@ def aggregate_places(extracted_posts: List[ExtractedPost]) -> List[CandidatePlac
                     "avg_confidence": place.confidence,
                     "best_time_of_day": list(post.best_time_of_day),
                     "estimated_visit_minutes": estimate_duration(place.type),
+                    "lat": place.lat,
+                    "lng": place.lng,
+                    "google_place_id": place.google_place_id,
                 }
             else:
                 existing = merged[key]
@@ -83,8 +86,20 @@ def aggregate_places(extracted_posts: List[ExtractedPost]) -> List[CandidatePlac
                 for tod in post.best_time_of_day:
                     if tod not in existing["best_time_of_day"]:
                         existing["best_time_of_day"].append(tod)
+                if place.lat is not None and place.lng is not None:
+                    prev_conf = existing.get("_merge_best_conf", -1.0)
+                    if existing.get("lat") is None or place.confidence >= prev_conf:
+                        existing["lat"] = place.lat
+                        existing["lng"] = place.lng
+                        existing["_merge_best_conf"] = place.confidence
+                if place.google_place_id and not existing.get("google_place_id"):
+                    existing["google_place_id"] = place.google_place_id
 
-    return [CandidatePlace(**value) for value in merged.values()]
+    out: List[CandidatePlace] = []
+    for value in merged.values():
+        value.pop("_merge_best_conf", None)
+        out.append(CandidatePlace(**value))
+    return out
 
 
 def compute_preference_match(place: CandidatePlace, profile: PreferenceProfile) -> float:

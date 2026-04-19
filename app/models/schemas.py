@@ -19,6 +19,7 @@ class CandidatePlace(BaseModel):
     neighborhood: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
+    google_place_id: Optional[str] = None
     opening_hours: Optional[str] = None
     estimated_visit_minutes: Optional[int] = 60
     best_time_of_day: List[str] = []

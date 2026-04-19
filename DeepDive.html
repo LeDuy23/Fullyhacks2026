@@ -1045,6 +1045,85 @@ function geocodeAddressPromise(geo, address) {
   });
 }
 
+/** Match Python `normalize_key` in app/services/scoring.py for itinerary ↔ candidate place_id. */
+function normalizeTripPlaceId(value) {
+  return String(value || '').trim().toLowerCase().replace(/ /g, '_');
+}
+
+/** Fuzzy name match when the LLM tweaks punctuation or “&” vs “and”. */
+function normalizeTripNameLoose(s) {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function geocodePlaceIdPromise(geo, placeId) {
+  const pid = String(placeId || '').trim();
+  if (!geo || !pid) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    geo.geocode({ placeId: pid }, (results, status) => {
+      if (status === 'OK' && results && results[0] && results[0].geometry && results[0].geometry.location) {
+        const loc = results[0].geometry.location;
+        resolve({ lat: loc.lat(), lng: loc.lng() });
+      } else {
+        resolve(null);
+      }
+    });
+  });
+}
+
+/**
+ * Resolve planner itinerary item → candidate place (coords / Places id) even when LLM rewrites labels.
+ */
+function findCandidateForItineraryItem(it, places, byId, byNormId, byNameLower, byNameLoose) {
+  const pid = String(it.place_id || '').trim();
+  if (pid) {
+    let c = byId.get(pid) || byNormId.get(normalizeTripPlaceId(pid));
+    if (c) return c;
+    const np = normalizeTripPlaceId(pid);
+    for (const p of places) {
+      if (normalizeTripPlaceId(p.place_id) === np) return p;
+      const gid = p.google_place_id && String(p.google_place_id).trim();
+      if (gid && gid === pid) return p;
+    }
+  }
+  const nm = String(it.name || '').trim().toLowerCase();
+  if (nm) {
+    let c = byNameLower.get(nm);
+    if (c) return c;
+    const loose = normalizeTripNameLoose(it.name);
+    if (loose) {
+      c = byNameLoose.get(loose);
+      if (c) return c;
+    }
+  }
+  return null;
+}
+
+/** Spread stacked pins (e.g. same city-center fallback) so numbered markers are readable. */
+function jitterOverlappingPlanPins(pins) {
+  const buckets = new Map();
+  pins.forEach((pin, i) => {
+    const lat = pin[0];
+    const lng = pin[1];
+    const k = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(i);
+  });
+  buckets.forEach((indices) => {
+    if (indices.length <= 1) return;
+    indices.forEach((pi, j) => {
+      if (j === 0) return;
+      const pin = pins[pi];
+      const n = j;
+      pin[0] += (n % 8) * 0.00025;
+      pin[1] += Math.floor(n / 8) * 0.00025;
+    });
+  });
+}
+
 /**
  * Map pins to itinerary stops only (no duplicate candidate dump + fake grid).
  * Resolves coordinates from candidate places, then Geocoding "name, destination" when needed.
@@ -1052,11 +1131,22 @@ function geocodeAddressPromise(geo, address) {
 async function mapPlanFromPostsToTrip(data, destName) {
   const apiTrip = data.trip;
   const places = data.candidate_places || [];
-  const byId = new Map(places.map((p) => [String(p.place_id), p]));
+  const byId = new Map();
+  const byNormId = new Map();
   const byNameLower = new Map();
+  const byNameLoose = new Map();
   for (const p of places) {
+    const id = String(p.place_id || '');
+    if (id) {
+      byId.set(id, p);
+      byNormId.set(normalizeTripPlaceId(id), p);
+    }
+    const gid = p.google_place_id && String(p.google_place_id).trim();
+    if (gid) byId.set(gid, p);
     const k = String(p.name || '').trim().toLowerCase();
     if (k) byNameLower.set(k, p);
+    const nl = normalizeTripNameLoose(p.name);
+    if (nl) byNameLoose.set(nl, p);
   }
   const destStr = String(apiTrip.destination || destName || '').trim();
 
@@ -1083,22 +1173,29 @@ async function mapPlanFromPostsToTrip(data, destName) {
   }
 
   for (const it of itineraryItems) {
-    let c = byId.get(String(it.place_id));
-    if (!c && it.name) {
-      c = byNameLower.get(String(it.name).trim().toLowerCase());
-    }
+    const c = findCandidateForItineraryItem(it, places, byId, byNormId, byNameLower, byNameLoose);
     let lat;
     let lng;
     if (c != null && c.lat != null && c.lng != null && isFiniteGeoNum(c.lat) && isFiniteGeoNum(c.lng)) {
       lat = c.lat;
       lng = c.lng;
-    } else if (geo) {
+    } else if (geo && c != null && c.google_place_id) {
+      const gp = await geocodePlaceIdPromise(geo, c.google_place_id);
+      if (gp) {
+        lat = gp.lat;
+        lng = gp.lng;
+      }
+    }
+    if (geo && !isFiniteGeoNum(lat)) {
       let r = null;
       if (destStr) {
         r = await geocodeAddressPromise(geo, `${it.name}, ${destStr}`);
       }
       if (!r && destStr) {
         r = await geocodeAddressPromise(geo, `${it.name} near ${destStr}`);
+      }
+      if (!r && c != null && c.neighborhood && destStr) {
+        r = await geocodeAddressPromise(geo, `${it.name}, ${c.neighborhood}, ${destStr}`);
       }
       if (!r && destCenter) {
         r = destCenter;
@@ -1112,6 +1209,8 @@ async function mapPlanFromPostsToTrip(data, destName) {
       pins.push([lat, lng, it.name, it.place_id || '']);
     }
   }
+
+  jitterOverlappingPlanPins(pins);
 
   let center = null;
   if (pins.length > 0) {
