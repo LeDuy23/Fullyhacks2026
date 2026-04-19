@@ -24,6 +24,8 @@ _PROXY_SUFFIXES: tuple[str, ...] = (
     ".tiktokcdn-us.com",
     ".tiktokv.com",
     ".tiktokw.eu",
+    ".byteimg.com",
+    ".ibyteimg.com",
     ".googleusercontent.com",
     ".ytimg.com",
     ".ggpht.com",

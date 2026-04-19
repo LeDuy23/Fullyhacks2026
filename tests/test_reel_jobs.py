@@ -54,3 +54,4 @@ def test_proxy_url_allowlist_ytimg() -> None:
 
     assert reel_jobs._proxy_url_allowed("https://i.ytimg.com/vi/abc123/hqdefault.jpg") is True
     assert reel_jobs._proxy_url_allowed("https://p16-sign-sg.tiktokcdn.com/foo~tplv-obj.image") is True
+    assert reel_jobs._proxy_url_allowed("https://p16-sign-va.tiktokcdn-us.com/obj/foo") is True
