@@ -90,6 +90,12 @@ test.describe('DeepDive UI', () => {
     });
     await page.getByTestId('plan-new-trip').click();
     await page.getByTestId('plan-destination-input').fill('Maldives');
+    await page.getByTestId('plan-when').click();
+    const dayCells = page.getByTestId('plan-cal-day');
+    const n = await dayCells.count();
+    expect(n).toBeGreaterThan(2);
+    await dayCells.nth(0).click();
+    await dayCells.nth(Math.min(8, n - 1)).click();
     await page.getByTestId('plan-submit').click();
     await expect(page.getByTestId('trip-detail-back')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Mock plan for E2E')).toBeVisible();

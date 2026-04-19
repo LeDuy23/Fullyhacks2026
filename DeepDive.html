@@ -139,6 +139,30 @@ function ensureHttpScheme(url) {
   return u;
 }
 
+/** Prefer place_id (stable); else lat,lng; else name search. Avoids broken or stale Google redirect URLs. */
+function googleMapsOpenUrl(placeId, name, lat, lng) {
+  const pid = String(placeId || '').trim();
+  if (pid && !/^pin-/i.test(pid)) {
+    return `https://www.google.com/maps/search/?api=1&query_place_id=${encodeURIComponent(pid)}`;
+  }
+  const la = typeof lat === 'number' ? lat : parseFloat(lat);
+  const ln = typeof lng === 'number' ? lng : parseFloat(lng);
+  if (Number.isFinite(la) && Number.isFinite(ln)) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${la},${ln}`)}`;
+  }
+  const q = String(name || '').trim();
+  if (q) return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+  return '';
+}
+
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 /**
  * First social URL in pasted text (Instagram reels, TikTok, short links).
  * Handles scheme-less URLs (vm.tiktok.com/…), zero-width chars, and line breaks around the link.
@@ -997,28 +1021,126 @@ function createZoomAwareUserPingMarker({ map, position, title, fillColor, stroke
   return marker;
 }
 
-function mapPlanFromPostsToTrip(data, destName) {
+async function waitForGoogleMaps(maxMs = 12000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    if (window.google && google.maps && google.maps.Geocoder) return true;
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return false;
+}
+
+function geocodeAddressPromise(geo, address) {
+  const addr = String(address || '').trim();
+  if (!geo || !addr) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    geo.geocode({ address: addr }, (results, status) => {
+      if (status === 'OK' && results && results[0] && results[0].geometry && results[0].geometry.location) {
+        const loc = results[0].geometry.location;
+        resolve({ lat: loc.lat(), lng: loc.lng() });
+      } else {
+        resolve(null);
+      }
+    });
+  });
+}
+
+/**
+ * Map pins to itinerary stops only (no duplicate candidate dump + fake grid).
+ * Resolves coordinates from candidate places, then Geocoding "name, destination" when needed.
+ */
+async function mapPlanFromPostsToTrip(data, destName) {
   const apiTrip = data.trip;
   const places = data.candidate_places || [];
-  const pins = [];
-  let center = null;
+  const byId = new Map(places.map((p) => [String(p.place_id), p]));
+  const byNameLower = new Map();
   for (const p of places) {
-    if (p.lat != null && p.lng != null) {
-      pins.push([p.lat, p.lng, p.name]);
-      if (!center) center = [p.lat, p.lng];
-    }
+    const k = String(p.name || '').trim().toLowerCase();
+    if (k) byNameLower.set(k, p);
   }
-  if (!center) center = roughCenterForDestination(apiTrip.destination || destName);
-  let idx = 0;
+  const destStr = String(apiTrip.destination || destName || '').trim();
+
+  const itineraryItems = [];
+  const seen = new Set();
   for (const day of apiTrip.days || []) {
     for (const it of day.items || []) {
-      if (pins.length < 16) {
-        const [lat, lng] = center;
-        pins.push([lat + (idx % 6) * 0.015, lng + (idx / 6) * 0.015, it.name]);
-        idx++;
+      const dedupeKey = String(it.place_id || '') + '\0' + String(it.name || '');
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      itineraryItems.push(it);
+      if (itineraryItems.length >= 24) break;
+    }
+    if (itineraryItems.length >= 24) break;
+  }
+
+  const pins = [];
+  const hasMaps = await waitForGoogleMaps();
+  const geo = hasMaps ? new google.maps.Geocoder() : null;
+
+  let destCenter = null;
+  if (geo && destStr) {
+    destCenter = await geocodeAddressPromise(geo, destStr);
+  }
+
+  for (const it of itineraryItems) {
+    let c = byId.get(String(it.place_id));
+    if (!c && it.name) {
+      c = byNameLower.get(String(it.name).trim().toLowerCase());
+    }
+    let lat;
+    let lng;
+    if (c != null && c.lat != null && c.lng != null && isFiniteGeoNum(c.lat) && isFiniteGeoNum(c.lng)) {
+      lat = c.lat;
+      lng = c.lng;
+    } else if (geo) {
+      let r = null;
+      if (destStr) {
+        r = await geocodeAddressPromise(geo, `${it.name}, ${destStr}`);
+      }
+      if (!r && destStr) {
+        r = await geocodeAddressPromise(geo, `${it.name} near ${destStr}`);
+      }
+      if (!r && destCenter) {
+        r = destCenter;
+      }
+      if (r) {
+        lat = r.lat;
+        lng = r.lng;
       }
     }
+    if (isFiniteGeoNum(lat) && isFiniteGeoNum(lng)) {
+      pins.push([lat, lng, it.name, it.place_id || '']);
+    }
   }
+
+  let center = null;
+  if (pins.length > 0) {
+    const sumLat = pins.reduce((s, p) => s + p[0], 0);
+    const sumLng = pins.reduce((s, p) => s + p[1], 0);
+    center = [sumLat / pins.length, sumLng / pins.length];
+  } else if (destCenter) {
+    center = [destCenter.lat, destCenter.lng];
+  } else {
+    center = roughCenterForDestination(destStr || 'trip');
+  }
+
+  if (pins.length === 0 && itineraryItems.length > 0) {
+    const rc = destCenter ? [destCenter.lat, destCenter.lng] : center;
+    itineraryItems.slice(0, 12).forEach((it, idx) => {
+      pins.push([
+        rc[0] + (idx % 4) * 0.025,
+        rc[1] + Math.floor(idx / 4) * 0.025,
+        it.name,
+        it.place_id || '',
+      ]);
+    });
+    if (pins.length > 0) {
+      const sumLat = pins.reduce((s, p) => s + p[0], 0);
+      const sumLng = pins.reduce((s, p) => s + p[1], 0);
+      center = [sumLat / pins.length, sumLng / pins.length];
+    }
+  }
+
   const spots = (apiTrip.days || []).reduce((n, d) => n + (d.items?.length || 0), 0);
   return {
     id: Date.now(),
@@ -1526,6 +1648,7 @@ function PlanTripPanel({ onClose, onPlan, initialDest = '', userLists = [], save
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const fmt = (d) => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+  const datesReady = Boolean(dateFrom && dateTo);
 
   const interestGroupsFiltered = useMemo(() => {
     const q = interestSearch.trim().toLowerCase();
@@ -1623,6 +1746,11 @@ function PlanTripPanel({ onClose, onPlan, initialDest = '', userLists = [], save
 
   const runPlan = async () => {
     if (!dest || loading) return;
+    if (!dateFrom || !dateTo) {
+      setErr('Pick a start date and an end date for your trip.');
+      setShowCal(true);
+      return;
+    }
     setErr('');
     setLoading(true);
     try {
@@ -1886,12 +2014,12 @@ function PlanTripPanel({ onClose, onPlan, initialDest = '', userLists = [], save
             color:'#ffb3bc',fontSize:12,fontWeight:600,lineHeight:1.45,
           }}>{err}</div>
         )}
-        {/* Date picker */}
-        <div onClick={()=>setShowCal(!showCal)} style={{
+        {/* Date picker — both start and end required before Plan This Trip */}
+        <div data-testid="plan-when" onClick={()=>setShowCal(!showCal)} style={{
           marginTop:16,padding:'14px 16px',borderRadius:14,background:C.glass,
-          border:`1px solid ${showCal?C.biolume:C.glassBd}`,
+          border:`1px solid ${showCal||!datesReady?C.biolume:C.glassBd}`,
           display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',transition:'all 0.2s'}}>
-          <span style={{color:'white',fontWeight:600}}>📅 When</span>
+          <span style={{color:'white',fontWeight:600}}>📅 When <span style={{color:!datesReady?C.coral:C.textMut,fontSize:11,fontWeight:700}}>(required)</span></span>
           <span style={{color:C.biolume,fontWeight:700,fontSize:14}}>
             {dateFrom&&dateTo?`${fmt(dateFrom)} → ${fmt(dateTo)}`:dateFrom?`${fmt(dateFrom)} → …`:'Add dates'}
           </span>
@@ -1912,11 +2040,11 @@ function PlanTripPanel({ onClose, onPlan, initialDest = '', userLists = [], save
             else{setDateTo(t);}
           };
           return (
-            <div style={{marginTop:8,padding:'16px',borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
+            <div data-testid="plan-calendar" style={{marginTop:8,padding:'16px',borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-                <button onClick={()=>setCalMonth(new Date(y,m-1,1))} style={{background:'none',border:'none',color:C.biolume,fontSize:20,cursor:'pointer',padding:4}}>‹</button>
+                <button type="button" data-testid="plan-cal-prev" onClick={()=>setCalMonth(new Date(y,m-1,1))} style={{background:'none',border:'none',color:C.biolume,fontSize:20,cursor:'pointer',padding:4}}>‹</button>
                 <div style={{color:'white',fontWeight:800,fontSize:15}}>{calMonth.toLocaleString('en-US',{month:'long',year:'numeric'})}</div>
-                <button onClick={()=>setCalMonth(new Date(y,m+1,1))} style={{background:'none',border:'none',color:C.biolume,fontSize:20,cursor:'pointer',padding:4}}>›</button>
+                <button type="button" data-testid="plan-cal-next" onClick={()=>setCalMonth(new Date(y,m+1,1))} style={{background:'none',border:'none',color:C.biolume,fontSize:20,cursor:'pointer',padding:4}}>›</button>
               </div>
               <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:4}}>
                 {['S','M','T','W','T','F','S'].map((d,i)=>(
@@ -1932,7 +2060,21 @@ function PlanTripPanel({ onClose, onPlan, initialDest = '', userLists = [], save
                   const inRange=dateFrom&&dateTo&&t>dateFrom&&t<dateTo;
                   const selected=isFrom||isTo;
                   return (
-                    <div key={i} onClick={()=>pick(d)} style={{
+                    <div
+                      key={i}
+                      role="button"
+                      tabIndex={isPast ? -1 : 0}
+                      data-testid={isPast ? undefined : 'plan-cal-day'}
+                      data-day-ts={t}
+                      onClick={()=>pick(d)}
+                      onKeyDown={(e) => {
+                        if (isPast) return;
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          pick(d);
+                        }
+                      }}
+                      style={{
                       aspectRatio:'1',display:'flex',alignItems:'center',justifyContent:'center',
                       fontSize:13,fontWeight:selected?800:600,
                       color:isPast?C.textMut:selected?C.deep:inRange?C.biolume:'white',
@@ -2065,11 +2207,11 @@ function PlanTripPanel({ onClose, onPlan, initialDest = '', userLists = [], save
         </div>
       )}
       <div style={{padding:'16px 20px',borderTop:`1px solid ${C.glassBd}`}}>
-        <button type="button" onClick={runPlan} disabled={!dest||loading} style={{
-          width:'100%',padding:'16px',borderRadius:14,fontSize:16,fontWeight:800,cursor:!dest||loading?'default':'pointer',
-          background:dest&&!loading?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.08)',
-          color:dest&&!loading?C.deep:'rgba(255,255,255,0.3)',border:'none',transition:'all 0.3s',
-          boxShadow:dest&&!loading?'0 0 30px rgba(0,229,212,0.35)':'none',
+        <button type="button" onClick={runPlan} disabled={!dest||loading||!datesReady} style={{
+          width:'100%',padding:'16px',borderRadius:14,fontSize:16,fontWeight:800,cursor:!dest||loading||!datesReady?'default':'pointer',
+          background:dest&&datesReady&&!loading?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.08)',
+          color:dest&&datesReady&&!loading?C.deep:'rgba(255,255,255,0.3)',border:'none',transition:'all 0.3s',
+          boxShadow:dest&&datesReady&&!loading?'0 0 30px rgba(0,229,212,0.35)':'none',
           opacity:loading?0.85:1,
         }} data-testid="plan-submit">{loading ? 'Planning…' : '🗺️ Plan This Trip'}</button>
       </div>
@@ -2095,6 +2237,10 @@ function activityTypeIcon(activityType) {
 function openingHoursForPlaceId(placeId, candidatePlaces) {
   const found = (candidatePlaces || []).find((p) => p.place_id === placeId);
   return found && found.opening_hours ? String(found.opening_hours) : '';
+}
+
+function candidatePlaceForTripItem(it, candidatePlaces) {
+  return (candidatePlaces || []).find((p) => p.place_id === it.place_id) || null;
 }
 
 function buildSyntheticTripPlan(trip) {
@@ -2149,6 +2295,13 @@ function TripDayTimeline({ day, candidatePlaces, lineColor }) {
       {items.map((it, idx) => {
         const icon = activityTypeIcon(it.activity_type);
         const hours = openingHoursForPlaceId(it.place_id, candidatePlaces);
+        const cand = candidatePlaceForTripItem(it, candidatePlaces);
+        const mapsHref = googleMapsOpenUrl(
+          it.place_id,
+          it.name,
+          cand != null ? cand.lat : undefined,
+          cand != null ? cand.lng : undefined,
+        );
         const last = idx === items.length - 1;
         return (
           <div key={`${it.place_id}-${idx}`} style={{ display: 'flex', gap: 14, alignItems: 'stretch' }}>
@@ -2189,6 +2342,18 @@ function TripDayTimeline({ day, candidatePlaces, lineColor }) {
               <div style={{ color: C.textSec, fontSize: 12, marginTop: 4 }}>
                 {it.activity_type} · {it.duration_minutes} min
               </div>
+              {mapsHref ? (
+                <div style={{ marginTop: 8 }}>
+                  <a
+                    href={mapsHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: C.biolume, fontSize: 12, fontWeight: 800 }}
+                  >
+                    Open in Google Maps →
+                  </a>
+                </div>
+              ) : null}
               <div style={{ color: C.textMut, fontSize: 11, marginTop: 6, lineHeight: 1.45 }}>
                 {hours ? (
                   <>
@@ -2713,7 +2878,6 @@ function AddSpotsSheet({
     if (selectedPlaces.length === 0) return;
     selectedPlaces.forEach((place) => onAddPlaceToMap(placePayload(place)));
     bumpAddedForSelected('map');
-    clearExtractAfterSave();
   };
   const saveSelectedToList = (listId, listMeta) => {
     if (!listId) return;
@@ -2738,7 +2902,6 @@ function AddSpotsSheet({
       onAddPlaceToList(payload, listId, listMeta, { skipMapPing: true });
     });
     bumpAddedForSelected('both');
-    clearExtractAfterSave();
   };
   const createListAndSave = () => {
     const nm = newListName.trim();
@@ -2753,7 +2916,6 @@ function AddSpotsSheet({
       });
       bumpAddedForSelected('both');
       setNewListName('');
-      clearExtractAfterSave();
     }
   };
 
@@ -3122,7 +3284,13 @@ function AddSpotsSheet({
                             onClick={() => {
                               if (onMap) return;
                               onAddPlaceToMap(placePayload(place));
-                              clearExtractAfterSave();
+                              setAddedPlaces((a) => {
+                                const prev = a[key];
+                                return {
+                                  ...a,
+                                  [key]: prev === 'list' || prev === 'both' ? 'both' : 'map',
+                                };
+                              });
                             }}
                             style={{
                               padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:onMap?'default':'pointer',
@@ -3185,7 +3353,7 @@ function AddSpotsSheet({
                               const payload = placePayload(place);
                               if (!onMap) onAddPlaceToMap(payload);
                               if (!onList) onAddPlaceToList(payload, lid, undefined, { skipMapPing: !onMap });
-                              clearExtractAfterSave();
+                              setAddedPlaces((a) => ({ ...a, [key]: 'both' }));
                             }}
                             style={{
                               padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,
@@ -4621,7 +4789,8 @@ function MainApp({ onSignOut }) {
     map.setZoom(13);
   }, []);
 
-  const addPlaceToMap = (place) => {
+  const addPlaceToMap = (place, opts = {}) => {
+    const panMap = opts.panMap !== false;
     if (!window.google || !google.maps) {
       alert('Map is still loading — try again in a moment.');
       return;
@@ -4644,8 +4813,10 @@ function MainApp({ onSignOut }) {
         strokeColor: 'white',
       });
       userPlaceMarkersRef.current.push(marker);
-      map.panTo(loc);
-      map.setZoom(14);
+      if (panMap) {
+        map.panTo(loc);
+        map.setZoom(14);
+      }
       const sid = `u-${Date.now()}`;
       const hint = place.destinationHint || '';
       const addr = result.formatted_address || hint || place.name;
@@ -4751,7 +4922,12 @@ function MainApp({ onSignOut }) {
     map.setZoom(t.zoom || 13);
     setTimeout(() => {
       if (!sharedMapRef.current) return;
-      (t.pins || []).forEach(([lat, lng, name], i) => {
+      (t.pins || []).forEach((pin, i) => {
+        const lat = pin[0];
+        const lng = pin[1];
+        const name = pin[2];
+        const placeId = pin[3] || '';
+        const mapsUrl = googleMapsOpenUrl(placeId, name, lat, lng);
         const marker = new google.maps.Marker({
           position: { lat, lng },
           map: sharedMapRef.current,
@@ -4772,7 +4948,20 @@ function MainApp({ onSignOut }) {
           },
           title: name,
         });
-        marker.addListener('click', () => { setSelectedTrip(t); setPanel('detail'); });
+        const info = new google.maps.InfoWindow({
+          content:
+            `<div style="font-family:Nunito,sans-serif;max-width:220px;padding:6px 8px">` +
+            `<div style="font-weight:800;color:#111827;margin-bottom:8px">${escapeHtml(String(name || ''))}</div>` +
+            (mapsUrl
+              ? `<a href="${mapsUrl.replace(/"/g, '&quot;')}" target="_blank" rel="noopener noreferrer" style="color:#00a0e9;font-weight:700;font-size:13px">Open in Google Maps →</a>`
+              : '') +
+            `</div>`,
+        });
+        marker.addListener('click', () => {
+          info.open({ map: sharedMapRef.current, anchor: marker });
+          setSelectedTrip(t);
+          setPanel('detail');
+        });
         tripMarkersRef.current.push(marker);
       });
     }, 500);
@@ -4797,7 +4986,7 @@ function MainApp({ onSignOut }) {
 
   const handlePlanFromPanel = async (ctx) => {
     const data = await planFromPostsRequest(ctx);
-    const trip = mapPlanFromPostsToTrip(data, ctx.dest);
+    const trip = await mapPlanFromPostsToTrip(data, ctx.dest);
     setTrips((t) => [...t, trip]);
     handleTripClick(trip);
   };
@@ -5036,6 +5225,11 @@ function MainApp({ onSignOut }) {
                 const foodish = isFoodLikeTypes(types);
                 const addr = pl.formatted_address || '';
                 const yelp = yelpSearchUrl(pl.name, addr);
+                const officialSite = ensureHttpScheme(pl.website);
+                const googleMapsFromPlace =
+                  (headerPlaceDetailId && String(headerPlaceDetailId).trim()
+                    ? `https://www.google.com/maps/search/?api=1&query_place_id=${encodeURIComponent(headerPlaceDetailId)}`
+                    : '') || ensureHttpScheme(pl.url);
                 const priceTable = ['—', '$', '$$', '$$$', '$$$$'];
                 const price =
                   pl.price_level != null
@@ -5103,9 +5297,9 @@ function MainApp({ onSignOut }) {
                         ))}
                       </div>
                     )}
-                    {pl.website ? (
+                    {officialSite ? (
                       <a
-                        href={pl.website}
+                        href={officialSite}
                         target="_blank"
                         rel="noopener noreferrer"
                         style={{display:'inline-block',marginTop:12,color:C.biolume,fontSize:13,fontWeight:700}}
@@ -5113,9 +5307,9 @@ function MainApp({ onSignOut }) {
                         Official website →
                       </a>
                     ) : null}
-                    {pl.url ? (
+                    {googleMapsFromPlace ? (
                       <div style={{marginTop:8}}>
-                        <a href={pl.url} target="_blank" rel="noopener noreferrer" style={{color:C.textMut,fontSize:11}}>
+                        <a href={googleMapsFromPlace} target="_blank" rel="noopener noreferrer" style={{color:C.textMut,fontSize:11}}>
                           Open in Google Maps
                         </a>
                       </div>
@@ -5190,7 +5384,7 @@ function MainApp({ onSignOut }) {
             <AddSpotsSheet
               onClose={() => setPanel(null)}
               userLists={userLists}
-              onAddPlaceToMap={addPlaceToMap}
+              onAddPlaceToMap={(place) => addPlaceToMap(place, { panMap: false })}
               onAddPlaceToList={addPlaceToList}
               onCreateList={createListInline}
               importUiTheme={importUiTheme}
