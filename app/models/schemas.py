@@ -1,6 +1,7 @@
 from typing import List, Literal, Optional
+from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from app.models.extraction import (
     BudgetSignal,
@@ -74,6 +75,14 @@ class GenerateTripRequest(BaseModel):
     trip_constraints: TripConstraints
     preference_profile: PreferenceProfile
     candidate_places: List[CandidatePlace]
+    persist: bool = False
+    user_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def _user_when_persist(self):
+        if self.persist and self.user_id is None:
+            raise ValueError("user_id is required when persist is true")
+        return self
 
 
 class ReviseTripRequest(BaseModel):
@@ -81,6 +90,18 @@ class ReviseTripRequest(BaseModel):
     revision_request: str
     trip_constraints: Optional[TripConstraints] = None
     candidate_places: List[CandidatePlace]
+    persist: bool = False
+    user_id: Optional[UUID] = None
+    trip_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def _keys_when_persist(self):
+        if self.persist:
+            if self.user_id is None:
+                raise ValueError("user_id is required when persist is true")
+            if self.trip_id is None:
+                raise ValueError("trip_id is required when persist is true")
+        return self
 
 
 __all__ = [

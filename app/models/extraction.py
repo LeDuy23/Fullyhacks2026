@@ -1,6 +1,7 @@
 from typing import List, Literal, Optional
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 TimeOfDay = Literal["morning", "afternoon", "evening", "night", "flexible"]
 BudgetSignal = Literal["budget", "medium", "luxury", "unknown"]
@@ -48,6 +49,14 @@ class ExtractedPost(BaseModel):
 
 class ExtractRequest(BaseModel):
     posts: List[NormalizedPost]
+    persist: bool = False
+    user_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def _user_when_persist(self):
+        if self.persist and self.user_id is None:
+            raise ValueError("user_id is required when persist is true")
+        return self
 
 
 class ExtractResponse(BaseModel):

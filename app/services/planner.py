@@ -27,7 +27,7 @@ def build_generate_trip_prompt(request: GenerateTripRequest) -> str:
     return f"""
 Create a trip itinerary from this input:
 
-{json.dumps(request.model_dump(), indent=2)}
+{json.dumps(request.model_dump(mode="json"), indent=2)}
 
 Return JSON in exactly this shape:
 {{

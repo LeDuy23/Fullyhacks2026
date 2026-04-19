@@ -24,7 +24,7 @@ def build_revise_trip_prompt(request: ReviseTripRequest) -> str:
     return f"""
 Revise this itinerary.
 
-{json.dumps(request.model_dump(), indent=2)}
+{json.dumps(request.model_dump(mode="json"), indent=2)}
 
 Return JSON in exactly this shape:
 {{
