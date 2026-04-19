@@ -31,3 +31,26 @@ def test_get_job_not_found() -> None:
 def test_post_job_rejects_short_body() -> None:
     r = client.post("/api/jobs", json={"url": "ab"})
     assert r.status_code == 422
+
+
+def test_proxy_image_rejects_non_allowlisted_host() -> None:
+    r = client.get(
+        "/api/proxy-image",
+        params={"url": "https://example.com/logo.png"},
+    )
+    assert r.status_code == 403
+
+
+def test_proxy_image_rejects_http_only() -> None:
+    r = client.get(
+        "/api/proxy-image",
+        params={"url": "http://i.ytimg.com/vi/abc/hqdefault.jpg"},
+    )
+    assert r.status_code == 403
+
+
+def test_proxy_url_allowlist_ytimg() -> None:
+    import app.routes.reel_jobs as reel_jobs
+
+    assert reel_jobs._proxy_url_allowed("https://i.ytimg.com/vi/abc123/hqdefault.jpg") is True
+    assert reel_jobs._proxy_url_allowed("https://p16-sign-sg.tiktokcdn.com/foo~tplv-obj.image") is True

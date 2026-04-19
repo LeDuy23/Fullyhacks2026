@@ -57,13 +57,23 @@ const SPOT_PLACEHOLDER_SVG =
     '</svg>',
   );
 
-/** Remote CDN thumbnails (Instagram/TikTok) often 403 without ``referrerPolicy="no-referrer"``. */
+/** Same-origin proxy for HTTPS CDN thumbs; data/blob URLs stay direct. */
+function proxiedThumbSrc(src) {
+  if (!src || typeof src !== 'string') return '';
+  const s = src.trim();
+  if (s.startsWith('data:') || s.startsWith('blob:')) return s;
+  if (!/^https:\/\//i.test(s)) return s;
+  return `${getApiBase()}/api/proxy-image?url=${encodeURIComponent(s)}`;
+}
+
+/** Remote CDN thumbnails: load via backend proxy + no-referrer fallback path. */
 function ThumbImg({ src, alt = '', style }) {
   const [bad, setBad] = useState(false);
   useEffect(() => {
     setBad(false);
   }, [src]);
-  const effective = !src || bad ? SPOT_PLACEHOLDER_SVG : src;
+  const raw = src && String(src).trim() ? String(src).trim() : '';
+  const effective = !raw || bad ? SPOT_PLACEHOLDER_SVG : proxiedThumbSrc(raw);
   return (
     <img
       src={effective}
