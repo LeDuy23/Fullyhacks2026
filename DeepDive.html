@@ -45,6 +45,37 @@ const C = {
   glassBd:'rgba(255,255,255,0.13)', glassCard:'rgba(8,22,50,0.7)',
 };
 
+/** Local SVG data URL — avoids blocked third-party placeholders for reel/place thumbs. */
+const SPOT_PLACEHOLDER_SVG =
+  'data:image/svg+xml,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">' +
+      '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">' +
+      '<stop offset="0" stop-color="#00e5d4"/><stop offset="1" stop-color="#00a0e9"/></linearGradient></defs>' +
+      '<rect width="128" height="128" rx="18" fill="#0a1628"/>' +
+      '<path fill="url(#g)" d="M64 22c-15 0-26 11-26 24 0 20 26 46 26 46s26-26 26-46c0-13-11-24-26-24zm0 32a10 10 0 110-20 10 10 0 010 20z"/>' +
+    '</svg>',
+  );
+
+/** Remote CDN thumbnails (Instagram/TikTok) often 403 without ``referrerPolicy="no-referrer"``. */
+function ThumbImg({ src, alt = '', style }) {
+  const [bad, setBad] = useState(false);
+  useEffect(() => {
+    setBad(false);
+  }, [src]);
+  const effective = !src || bad ? SPOT_PLACEHOLDER_SVG : src;
+  return (
+    <img
+      src={effective}
+      alt={alt}
+      style={style}
+      referrerPolicy="no-referrer"
+      decoding="async"
+      onError={() => setBad(true)}
+    />
+  );
+}
+
 /* ─── API (FastAPI backend) ─── */
 function getApiBase() {
   const b = (typeof window !== 'undefined' && window.API_BASE_URL) || '';
@@ -2564,7 +2595,7 @@ function AddSpotsSheet({
                 <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
                   <div style={{position:'relative',width:76,height:76,flexShrink:0}}>
                     {sourceThumb ? (
-                      <img src={sourceThumb} alt="" style={{
+                      <ThumbImg src={sourceThumb} alt="" style={{
                         width:76,height:76,borderRadius:14,objectFit:'cover',
                         border: sourceReviewDark ? `1px solid ${C.glassBd}` : '1px solid rgba(17,24,39,0.08)',
                       }} />
@@ -2687,7 +2718,7 @@ function AddSpotsSheet({
                       }}>
                         <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
                           <div style={{position:'relative',width:64,height:64,flexShrink:0}}>
-                            <img src={sourceThumb || 'https://placehold.co/72x72?text=Spot'} alt=""
+                            <ThumbImg src={sourceThumb} alt=""
                               style={{
                                 width:64,height:64,borderRadius:14,objectFit:'cover',
                                 border: reviewLight ? '1px solid rgba(17,24,39,0.08)' : `1px solid ${C.glassBd}`,

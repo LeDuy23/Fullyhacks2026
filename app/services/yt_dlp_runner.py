@@ -9,7 +9,31 @@ import subprocess
 import tempfile
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
+
+
+def pick_http_thumbnail_url(meta: dict[str, Any]) -> Optional[str]:
+    """Pick a remote thumbnail URL from yt-dlp ``-j`` metadata.
+
+    Some extractors only populate ``thumbnails``; ``thumbnail`` may be missing or not
+    a usable HTTP(S) URL. Prefer the last HTTP(S) URL in ``thumbnails``.
+    """
+
+    def is_http(u: Any) -> bool:
+        return isinstance(u, str) and (u.startswith("https://") or u.startswith("http://"))
+
+    t = meta.get("thumbnail")
+    if is_http(t):
+        return str(t)
+    thumbs = meta.get("thumbnails")
+    if isinstance(thumbs, list):
+        for entry in reversed(thumbs):
+            if not isinstance(entry, dict):
+                continue
+            u = entry.get("url")
+            if is_http(u):
+                return str(u)
+    return None
 
 
 def _yt_dlp_cmd() -> list[str]:
@@ -81,4 +105,7 @@ def download_best_mp4(url: str, timeout_sec: int = 120) -> dict[str, Any]:
     if not mp4s:
         raise RuntimeError("yt-dlp did not produce an mp4 file")
     meta = fetch_metadata_json(url, timeout_sec=timeout_sec)
+    thumb = pick_http_thumbnail_url(meta)
+    if thumb:
+        meta = {**meta, "thumbnail": thumb}
     return {"temp_dir": tmp, "video_path": str(mp4s[0]), "metadata": meta}
