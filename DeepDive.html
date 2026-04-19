@@ -2325,8 +2325,28 @@ function AddSpotsSheet({
     keys.forEach((k) => { next[k] = !allOn; });
     setSelectedPlaceKeys(next);
   };
+  const bumpAddedForSelected = (mode) => {
+    setAddedPlaces((a) => {
+      const next = { ...a };
+      extractPlacesInfo.places.forEach((p, idx) => {
+        const k = `${idx}-${p.name}`;
+        if (!selectedPlaceKeys[k]) return;
+        const prev = a[k];
+        if (mode === 'map') {
+          next[k] = prev === 'list' || prev === 'both' ? 'both' : 'map';
+        } else if (mode === 'list') {
+          next[k] = prev === 'map' || prev === 'both' ? 'both' : 'list';
+        } else {
+          next[k] = 'both';
+        }
+      });
+      return next;
+    });
+  };
+
   const saveSelectedToMap = () => {
     selectedPlaces.forEach((place) => onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint }));
+    bumpAddedForSelected('map');
   };
   const saveSelectedToList = (listId, listMeta) => {
     if (!listId) return;
@@ -2337,14 +2357,30 @@ function AddSpotsSheet({
         listMeta,
       ),
     );
+    bumpAddedForSelected('list');
+  };
+  /** Add every selected place to the map and the chosen list (two pins/list rows in parent). */
+  const saveSelectedMapAndList = (listId, listMeta) => {
+    if (!listId) return;
+    selectedPlaces.forEach((place) => {
+      const payload = { name: place.name, destinationHint: extractPlacesInfo.destinationHint };
+      onAddPlaceToMap(payload);
+      onAddPlaceToList(payload, listId, listMeta);
+    });
+    bumpAddedForSelected('both');
   };
   const createListAndSave = () => {
     const nm = newListName.trim();
     if (!nm) return;
     const id = onCreateList(nm);
     if (id) {
-      // `onCreateList` updates parent state asynchronously; pass list meta so saves work immediately.
-      saveSelectedToList(id, { id, name: nm, icon: '📋', color: C.biolume });
+      const meta = { id, name: nm, icon: '📋', color: C.biolume };
+      selectedPlaces.forEach((place) => {
+        const payload = { name: place.name, destinationHint: extractPlacesInfo.destinationHint };
+        onAddPlaceToList(payload, id, meta);
+        onAddPlaceToMap(payload);
+      });
+      bumpAddedForSelected('both');
       setBulkListId(id);
       setNewListName('');
     }
@@ -2636,6 +2672,8 @@ function AddSpotsSheet({
                   {extractPlacesInfo.places.map((place, idx) => {
                     const key = `${idx}-${place.name}`;
                     const st = addedPlaces[key];
+                    const onMap = st === 'map' || st === 'both';
+                    const onList = st === 'list' || st === 'both';
                     const pinColor = /restaurant|cafe|coffee|bar|food|dining|bakery|meal/i.test(place.type || '') ? '#ef4444' : '#3b82f6';
                     const desc = String(place.reason || '').trim();
                     const descPreview = desc.length > 140 ? `${desc.slice(0, 140)}…` : desc;
@@ -2697,63 +2735,91 @@ function AddSpotsSheet({
                             {selectedPlaceKeys[key] ? '✓' : ''}
                           </button>
                         </div>
-                        {!showImportReview ? (
-                          <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center',marginTop:10}}>
-                            <button
-                              type="button"
-                              data-testid={idx === 0 ? 'addspots-add-to-map' : undefined}
-                              disabled={!!st}
-                              onClick={() => {
-                                onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint });
-                                setAddedPlaces((a) => ({ ...a, [key]: 'map' }));
-                              }}
-                              style={{
-                                padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:st?'default':'pointer',
-                                border:`1px solid ${C.biolume}`,background:st==='map'?'rgba(0,229,212,0.25)':'rgba(0,229,212,0.12)',
-                                color:C.biolume,opacity:st&&st!=='map'?0.5:1,
-                              }}
-                            >{st === 'map' ? 'On map ✓' : 'Add to map'}</button>
-                            <select
-                              data-testid={idx === 0 ? 'addspots-list-select' : undefined}
-                              value={getListPick(idx)}
-                              onChange={(e) => setListPickByIdx((p) => ({ ...p, [idx]: e.target.value }))}
-                              style={{
-                                padding:'8px 10px',borderRadius:10,background:'rgba(255,255,255,0.08)',
-                                border:`1px solid ${C.glassBd}`,color:'white',fontSize:12,maxWidth:160,
-                              }}
-                            >
-                              {userLists.length === 0 ? (
-                                <option value="">Create a list first</option>
-                              ) : (
-                                <>
-                                  <option value="">Select list…</option>
-                                  {userLists.map((l) => (
-                                    <option key={l.id} value={l.id}>{l.name}</option>
-                                  ))}
-                                </>
-                              )}
-                            </select>
-                            <button
-                              type="button"
-                              data-testid={idx === 0 ? 'addspots-add-to-list' : undefined}
-                              disabled={!!st || !getListPick(idx) || userLists.length === 0}
-                              onClick={() => {
-                                const lid = getListPick(idx);
-                                if (!lid) return;
-                                onAddPlaceToList(
-                                  { name: place.name, destinationHint: extractPlacesInfo.destinationHint },
-                                  lid,
-                                );
-                                setAddedPlaces((a) => ({ ...a, [key]: 'list' }));
-                              }}
-                              style={{
-                                padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:st?'default':'pointer',
-                                border:`1px solid ${C.glassBd}`,background:st==='list'?'rgba(255,184,77,0.2)':C.glass,
-                                color:st==='list'?C.amber:'white',
-                              }}
-                            >{st === 'list' ? 'In list ✓' : 'Add to list'}</button>
-                          </div>
-                        ) : null}
+                        <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center',marginTop:10}}>
+                          <button
+                            type="button"
+                            data-testid={idx === 0 ? 'addspots-add-to-map' : undefined}
+                            disabled={onMap}
+                            onClick={() => {
+                              onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint });
+                              setAddedPlaces((a) => {
+                                const prev = a[key];
+                                return { ...a, [key]: prev === 'list' || prev === 'both' ? 'both' : 'map' };
+                              });
+                            }}
+                            style={{
+                              padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:onMap?'default':'pointer',
+                              border:`1px solid ${C.biolume}`,background:onMap?'rgba(0,229,212,0.25)':'rgba(0,229,212,0.12)',
+                              color:C.biolume,opacity:onMap?1:(onList?0.85:1),
+                            }}
+                          >{onMap ? 'On map ✓' : 'Add to map'}</button>
+                          <select
+                            data-testid={idx === 0 ? 'addspots-list-select' : undefined}
+                            value={getListPick(idx)}
+                            onChange={(e) => setListPickByIdx((p) => ({ ...p, [idx]: e.target.value }))}
+                            style={{
+                              padding:'8px 10px',borderRadius:10,
+                              background: reviewLight ? '#ffffff' : 'rgba(255,255,255,0.08)',
+                              border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                              color: reviewLight ? '#111827' : 'white',
+                              fontSize:12,maxWidth:160,
+                            }}
+                          >
+                            {userLists.length === 0 ? (
+                              <option value="">Create a list first</option>
+                            ) : (
+                              <>
+                                <option value="">Select list…</option>
+                                {userLists.map((l) => (
+                                  <option key={l.id} value={l.id}>{l.name}</option>
+                                ))}
+                              </>
+                            )}
+                          </select>
+                          <button
+                            type="button"
+                            data-testid={idx === 0 ? 'addspots-add-to-list' : undefined}
+                            disabled={onList || !getListPick(idx) || userLists.length === 0}
+                            onClick={() => {
+                              const lid = getListPick(idx);
+                              if (!lid) return;
+                              onAddPlaceToList(
+                                { name: place.name, destinationHint: extractPlacesInfo.destinationHint },
+                                lid,
+                              );
+                              setAddedPlaces((a) => {
+                                const prev = a[key];
+                                return { ...a, [key]: prev === 'map' || prev === 'both' ? 'both' : 'list' };
+                              });
+                            }}
+                            style={{
+                              padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:onList?'default':'pointer',
+                              border:`1px solid ${C.glassBd}`,background:onList?'rgba(255,184,77,0.2)':C.glass,
+                              color:onList?C.amber:'white',opacity:onList?1:(onMap?0.85:1),
+                            }}
+                          >{onList ? 'In list ✓' : 'Add to list'}</button>
+                          <button
+                            type="button"
+                            data-testid={idx === 0 ? 'addspots-add-to-map-and-list' : undefined}
+                            disabled={onMap && onList}
+                            onClick={() => {
+                              const lid = getListPick(idx);
+                              if (!lid || userLists.length === 0) return;
+                              const payload = { name: place.name, destinationHint: extractPlacesInfo.destinationHint };
+                              if (!onMap) onAddPlaceToMap(payload);
+                              if (!onList) onAddPlaceToList(payload, lid);
+                              setAddedPlaces((a) => ({ ...a, [key]: 'both' }));
+                            }}
+                            style={{
+                              padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,
+                              cursor:onMap&&onList?'default':'pointer',
+                              border:`1px solid ${C.biolume}`,
+                              background:'rgba(0,229,212,0.08)',
+                              color:C.biolumeB,
+                              opacity:onMap&&onList?0.45:1,
+                            }}
+                          >{onMap && onList ? 'Map & list ✓' : 'Map + list'}</button>
+                        </div>
                       </div>
                     );
                   })}
@@ -2788,7 +2854,7 @@ function AddSpotsSheet({
                     <button type="button" onClick={()=>saveSelectedToList(bulkListId)}
                       disabled={selectedPlaces.length===0 || userLists.length===0 || !bulkListId}
                       style={{
-                        flex: showImportReview ? '1 1 160px' : '0 1 auto',
+                        flex: showImportReview ? '1 1 140px' : '0 1 auto',
                         padding:'12px 14px',borderRadius:14,
                         border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
                         background: reviewLight ? '#f3f4f6' : C.glass,
@@ -2803,7 +2869,7 @@ function AddSpotsSheet({
                     </button>
                     <button type="button" onClick={saveSelectedToMap} disabled={selectedPlaces.length===0}
                       style={{
-                        flex: showImportReview ? '1 1 200px' : '0 1 auto',
+                        flex: showImportReview ? '1 1 140px' : '0 1 auto',
                         padding:'12px 14px',borderRadius:14,
                         border:'none',
                         background: reviewLight ? '#111827' : `linear-gradient(135deg,${C.biolume},#00a0e9)`,
@@ -2814,7 +2880,27 @@ function AddSpotsSheet({
                         display:'flex',alignItems:'center',justifyContent:'center',gap:8,
                       }}>
                       <span aria-hidden="true">⬇</span>
-                      Save Spots
+                      Save to map
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="addspots-bulk-map-and-list"
+                      onClick={() => saveSelectedMapAndList(bulkListId)}
+                      disabled={selectedPlaces.length===0 || userLists.length===0 || !bulkListId}
+                      style={{
+                        flex: showImportReview ? '1 1 200px' : '0 1 auto',
+                        padding:'12px 14px',borderRadius:14,
+                        border:`1px solid ${C.biolume}`,
+                        background:'rgba(0,229,212,0.12)',
+                        color: reviewLight ? '#0f766e' : C.biolumeB,
+                        fontWeight:900,fontSize:13,
+                        cursor:selectedPlaces.length&&userLists.length&&bulkListId?'pointer':'not-allowed',
+                        opacity:selectedPlaces.length&&userLists.length&&bulkListId?1:0.45,
+                        display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+                      }}
+                    >
+                      <span aria-hidden="true">📍</span>
+                      Map + list
                     </button>
                   </div>
                   <div style={{display:'flex',gap:10,marginTop:10,alignItems:'center',flexWrap:'wrap'}}>
