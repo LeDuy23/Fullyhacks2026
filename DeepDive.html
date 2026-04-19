@@ -3245,10 +3245,421 @@ function ActionSheet({onClose, onAction}) {
   );
 }
 
+/* ─── LIST DETAIL (dynamic from savedSpots + list) ─── */
+function pickLocChipLabel(spot) {
+  const parts = String(spot.loc || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return 'Unknown';
+  if (parts.length === 1) {
+    const a = parts[0];
+    return a.length > 26 ? `${a.slice(0, 24)}…` : a;
+  }
+  const mid = parts.length >= 3 ? parts[parts.length - 2] : parts[parts.length - 1];
+  return mid.length > 28 ? `${mid.slice(0, 26)}…` : mid;
+}
+
+function inferSpotCategory(spot) {
+  const t = `${spot.name || ''} ${spot.loc || ''}`.toLowerCase();
+  if (
+    /museum|gallery|monument|castle|temple|attraction|park|zoo|aquarium|heritage|histor|viewpoint|landmark|village|plage|beach|coast|bay/i.test(
+      t,
+    )
+  ) {
+    return 'Attractions';
+  }
+  if (/restaurant|cafe|coffee|bar|food|dining|meal|bakery|bistro|grill|pub/i.test(t)) return 'Food';
+  return 'Other';
+}
+
+function ListDetailView({ list, savedSpots, onBack, onAddSpots }) {
+  const [locKey, setLocKey] = useState(null);
+  const [catFilter, setCatFilter] = useState('All');
+  const [searchQ, setSearchQ] = useState('');
+
+  const spotsInList = useMemo(
+    () => (savedSpots || []).filter((s) => s.listId === list.id),
+    [savedSpots, list.id],
+  );
+
+  useEffect(() => {
+    setLocKey(null);
+    setCatFilter('All');
+    setSearchQ('');
+  }, [list.id]);
+
+  const locGroups = useMemo(() => {
+    const m = {};
+    spotsInList.forEach((s) => {
+      const k = pickLocChipLabel(s);
+      m[k] = (m[k] || 0) + 1;
+    });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [spotsInList]);
+
+  const categoryCounts = useMemo(() => {
+    const m = {};
+    spotsInList.forEach((s) => {
+      const c = inferSpotCategory(s);
+      m[c] = (m[c] || 0) + 1;
+    });
+    return m;
+  }, [spotsInList]);
+
+  const categoryKeys = useMemo(() => Object.keys(categoryCounts).sort(), [categoryCounts]);
+
+  const filtered = useMemo(() => {
+    const q = searchQ.trim().toLowerCase();
+    return spotsInList.filter((s) => {
+      if (locKey != null && pickLocChipLabel(s) !== locKey) return false;
+      if (catFilter !== 'All' && inferSpotCategory(s) !== catFilter) return false;
+      if (q) {
+        const hay = `${s.name || ''} ${s.loc || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [spotsInList, locKey, catFilter, searchQ]);
+
+  const shareList = () => {
+    const t = `${list.name} — ${spotsInList.length} spot${spotsInList.length === 1 ? '' : 's'}`;
+    if (navigator.share) {
+      navigator.share({ title: list.name, text: t }).catch(() => {});
+    } else if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).catch(() => {});
+    }
+  };
+
+  const cover = spotsInList[0];
+  const chipBase = {
+    flexShrink: 0,
+    padding: '8px 14px',
+    borderRadius: 99,
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: 'pointer',
+    border: '1px solid transparent',
+    whiteSpace: 'nowrap',
+    maxWidth: 200,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  };
+
+  const catStyle = (cat) => {
+    const on = catFilter === cat;
+    return {
+      ...chipBase,
+      background: on ? 'white' : C.glass,
+      color: on ? C.deep : C.textSec,
+      border: `1px solid ${on ? 'white' : C.glassBd}`,
+    };
+  };
+
+  const locStyle = (key) => {
+    const on = locKey === key;
+    return {
+      ...chipBase,
+      background: on ? 'rgba(0,229,212,0.18)' : 'rgba(255,255,255,0.06)',
+      color: on ? C.biolume : C.textSec,
+      border: `1px solid ${on ? C.biolume : C.glassBd}`,
+    };
+  };
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ padding: '12px 16px 10px', borderBottom: `1px solid ${C.glassBd}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+          <button
+            type="button"
+            onClick={onBack}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 12,
+              border: `1px solid ${C.glassBd}`,
+              background: C.glass,
+              color: 'white',
+              cursor: 'pointer',
+              fontSize: 18,
+              fontWeight: 800,
+            }}
+            aria-label="Back to lists"
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            onClick={shareList}
+            style={{
+              marginLeft: 'auto',
+              width: 36,
+              height: 36,
+              borderRadius: 12,
+              border: `1px solid ${C.glassBd}`,
+              background: C.glass,
+              color: C.textSec,
+              cursor: 'pointer',
+              fontSize: 16,
+            }}
+            aria-label="Share list"
+          >
+            ↗
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+          <div
+            style={{
+              width: 72,
+              height: 72,
+              borderRadius: 16,
+              flexShrink: 0,
+              background: cover ? `${cover.color}33` : `${list.color}33`,
+              border: `1px solid ${C.glassBd}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 34,
+            }}
+          >
+            {cover ? cover.emoji : list.icon}
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ color: 'white', fontWeight: 900, fontSize: 18, lineHeight: 1.2 }}>{list.name}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <div
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: '50%',
+                  background: `${list.color}44`,
+                  border: `1px solid ${C.glassBd}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 900,
+                  color: 'white',
+                }}
+              >
+                {(list.name || '?').slice(0, 1).toUpperCase()}
+              </div>
+              <span style={{ color: C.textSec, fontSize: 13, fontWeight: 700 }}>
+                {spotsInList.length} Spot{spotsInList.length === 1 ? '' : 's'}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {locGroups.length > 0 ? (
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            overflowX: 'auto',
+            padding: '10px 16px',
+            flexShrink: 0,
+            borderBottom: `1px solid ${C.glassBd}`,
+            WebkitOverflowScrolling: 'touch',
+          }}
+        >
+          {locGroups.map(([label, n]) => (
+            <button
+              type="button"
+              key={label}
+              onClick={() => setLocKey((k) => (k === label ? null : label))}
+              style={locStyle(label)}
+              title={label}
+            >
+              {label} {n}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          padding: '10px 16px',
+          flexShrink: 0,
+          borderBottom: `1px solid ${C.glassBd}`,
+          overflowX: 'auto',
+          WebkitOverflowScrolling: 'touch',
+        }}
+      >
+        <div
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 10,
+            background: C.glass,
+            border: `1px solid ${C.glassBd}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 15,
+            flexShrink: 0,
+          }}
+        >
+          🔍
+        </div>
+        <input
+          type="search"
+          value={searchQ}
+          onChange={(e) => setSearchQ(e.target.value)}
+          placeholder="Search this list…"
+          aria-label="Search spots in list"
+          style={{
+            minWidth: 120,
+            flex: 1,
+            maxWidth: 200,
+            padding: '8px 12px',
+            borderRadius: 10,
+            border: `1px solid ${C.glassBd}`,
+            background: 'rgba(255,255,255,0.06)',
+            color: 'white',
+            fontSize: 12,
+            fontWeight: 600,
+            outline: 'none',
+            fontFamily: 'inherit',
+          }}
+        />
+        <button type="button" onClick={() => setCatFilter('All')} style={catStyle('All')}>
+          All
+        </button>
+        {categoryKeys.map((c) => (
+          <button type="button" key={c} onClick={() => setCatFilter(c)} style={catStyle(c)}>
+            {c} {categoryCounts[c]}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px 88px', boxSizing: 'border-box' }}>
+        {filtered.length === 0 ? (
+          <div style={{ color: C.textSec, fontSize: 13, textAlign: 'center', padding: '32px 12px' }}>
+            No spots match these filters.
+          </div>
+        ) : (
+          filtered.map((s) => {
+            const cat = inferSpotCategory(s);
+            const isAtt = cat === 'Attractions';
+            const isFood = cat === 'Food';
+            return (
+              <div
+                key={s.id}
+                style={{
+                  display: 'flex',
+                  gap: 12,
+                  padding: '14px 12px',
+                  borderRadius: 16,
+                  background: C.glass,
+                  border: `1px solid ${C.glassBd}`,
+                  marginBottom: 10,
+                }}
+              >
+                <div
+                  style={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: 14,
+                    flexShrink: 0,
+                    background: `${s.color}28`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 26,
+                  }}
+                >
+                  {s.emoji || '📍'}
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ color: 'white', fontWeight: 900, fontSize: 15 }}>{s.name}</span>
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '3px 10px',
+                        borderRadius: 99,
+                        fontSize: 11,
+                        fontWeight: 800,
+                        background: isAtt ? 'rgba(255,110,122,0.15)' : isFood ? 'rgba(0,229,212,0.12)' : 'rgba(96,165,250,0.12)',
+                        color: isAtt ? C.coral : isFood ? C.biolume : '#93c5fd',
+                        border: `1px solid ${isAtt ? 'rgba(255,110,122,0.35)' : isFood ? 'rgba(0,229,212,0.25)' : 'rgba(96,165,250,0.3)'}`,
+                      }}
+                    >
+                      <span aria-hidden="true">📍</span>
+                      {cat}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      color: C.textSec,
+                      fontSize: 12,
+                      lineHeight: 1.45,
+                      display: '-webkit-box',
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {s.loc || 'Saved location'}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div
+        style={{
+          position: 'sticky',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          padding: '12px 16px 16px',
+          background: 'linear-gradient(180deg, transparent, rgba(6,14,28,0.95) 30%)',
+          borderTop: `1px solid ${C.glassBd}`,
+          flexShrink: 0,
+        }}
+      >
+        <button
+          type="button"
+          onClick={onAddSpots}
+          style={{
+            width: '100%',
+            padding: '14px',
+            borderRadius: 14,
+            fontWeight: 900,
+            fontSize: 14,
+            border: 'none',
+            cursor: 'pointer',
+            background: `linear-gradient(135deg,${C.biolume},#00a0e9)`,
+            color: C.deep,
+            boxShadow: '0 0 24px rgba(0,229,212,0.25)',
+          }}
+        >
+          + Add spots to this list
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ─── SPOTS TAB ─── */
 function SpotsTab({ onAddSpots, savedSpots, userLists, onNearbyMapSync = () => {} }) {
   const [filter, setFilter] = useState('All');
+  const [listFocusId, setListFocusId] = useState(null);
   const [userLoc, setUserLoc] = useState(null);
+
+  useEffect(() => {
+    if (listFocusId && !(userLists || []).some((l) => l.id === listFocusId)) setListFocusId(null);
+  }, [userLists, listFocusId]);
   const [geoState, setGeoState] = useState('idle');
   const [nearbyDiscover, setNearbyDiscover] = useState({ food: [], fun: [] });
   const [nearbyDiscoverLoading, setNearbyDiscoverLoading] = useState(false);
@@ -3333,12 +3744,28 @@ function SpotsTab({ onAddSpots, savedSpots, userLists, onNearbyMapSync = () => {
     });
   }, [filter, geoState, userLoc, nearbyDiscover, onNearbyMapSync]);
 
+  const focusedList = listFocusId ? (userLists || []).find((l) => l.id === listFocusId) : null;
+
   const withCoords = allSpots.filter((s) => s.lat != null && s.lng != null && !Number.isNaN(s.lat) && !Number.isNaN(s.lng));
   const nearbySpots = userLoc
     ? [...withCoords]
         .map((s) => ({ ...s, km: Math.round(haversine(userLoc, { lat: s.lat, lng: s.lng })) }))
         .sort((a, b) => a.km - b.km)
     : [];
+
+  if (focusedList) {
+    return (
+      <ListDetailView
+        list={focusedList}
+        savedSpots={savedSpots}
+        onBack={() => setListFocusId(null)}
+        onAddSpots={() => {
+          setListFocusId(null);
+          onAddSpots();
+        }}
+      />
+    );
+  }
 
   return (
     <div style={{padding:'20px',overflowY:'auto',height:'100%',boxSizing:'border-box'}}>
@@ -3359,9 +3786,22 @@ function SpotsTab({ onAddSpots, savedSpots, userLists, onNearbyMapSync = () => {
       {filter==='Lists' ? (
         <>
           <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Your Lists</div>
-          {lists.map((l) => (
-            <div key={l.id || l.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
-              background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10,cursor:'pointer'}}>
+          {lists.map((l, li) => (
+            <div
+              key={l.id || l.name}
+              role="button"
+              tabIndex={0}
+              data-testid={li === 0 ? 'spots-list-row' : undefined}
+              onClick={() => setListFocusId(l.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setListFocusId(l.id);
+                }
+              }}
+              style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+                background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10,cursor:'pointer'}}
+            >
               <div style={{width:46,height:46,borderRadius:12,background:`${l.color}22`,
                 display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>{l.icon}</div>
               <div>
