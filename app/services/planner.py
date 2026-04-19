@@ -1,6 +1,7 @@
 import json
+
 from app.models.schemas import GenerateTripRequest, TripPlan
-from app.services.ai_client import generate_json
+from app.services.llm import call_llm_validated
 
 
 PLAN_SYSTEM_PROMPT = """
@@ -56,5 +57,10 @@ Return JSON in exactly this shape:
 
 
 def generate_trip(request: GenerateTripRequest) -> TripPlan:
-    raw = generate_json(PLAN_SYSTEM_PROMPT, build_generate_trip_prompt(request))
-    return TripPlan(**raw)
+    prompt = f"""{PLAN_SYSTEM_PROMPT.strip()}
+
+Return ONLY valid JSON matching the requested shape. No explanation.
+
+{build_generate_trip_prompt(request).strip()}
+"""
+    return call_llm_validated(prompt, TripPlan)

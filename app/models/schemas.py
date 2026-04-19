@@ -1,54 +1,15 @@
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel
 
-TimeOfDay = Literal["morning", "afternoon", "evening", "night", "flexible"]
-BudgetSignal = Literal["budget", "medium", "luxury", "unknown"]
-PaceSignal = Literal["relaxed", "moderate", "packed", "unknown"]
-
-
-class NormalizedPost(BaseModel):
-    post_id: str
-    url: str
-    platform: Literal["tiktok", "instagram", "other"]
-    caption: Optional[str] = ""
-    transcript: Optional[str] = ""
-    ocr_text: Optional[str] = ""
-    thumbnail_text: Optional[str] = ""
-    raw_text: str
-
-
-class DestinationCandidate(BaseModel):
-    name: str
-    confidence: float = Field(ge=0.0, le=1.0)
-
-
-class PlaceCandidate(BaseModel):
-    name: str
-    type: str
-    confidence: float = Field(ge=0.0, le=1.0)
-    reason: str
-
-
-class ExtractedPost(BaseModel):
-    post_id: str
-    is_travel_relevant: bool
-    destination_candidates: List[DestinationCandidate]
-    place_candidates: List[PlaceCandidate]
-    activities: List[str]
-    vibe_tags: List[str]
-    best_time_of_day: List[TimeOfDay]
-    budget_signal: BudgetSignal
-    pace_signal: PaceSignal
-    notes: str
-
-
-class ExtractRequest(BaseModel):
-    posts: List[NormalizedPost]
-
-
-class ExtractResponse(BaseModel):
-    results: List[ExtractedPost]
+from app.models.extraction import (
+    BudgetSignal,
+    ExtractRequest,
+    ExtractResponse,
+    ExtractedPost,
+    NormalizedPost,
+    PaceSignal,
+)
 
 
 class CandidatePlace(BaseModel):
@@ -122,25 +83,19 @@ class ReviseTripRequest(BaseModel):
     candidate_places: List[CandidatePlace]
 
 
-# ---- Link import schemas ----------------------------------------------------
-
-class ImportLinksRequest(BaseModel):
-    urls: List[str] = Field(..., min_length=1)
-
-
-class ImportedPost(BaseModel):
-    post_id: str
-    url: str
-    platform: Literal["tiktok", "instagram", "other"]
-    caption: str = ""
-    transcript: str = ""
-    ocr_text: str = ""
-    thumbnail_text: str = ""
-    raw_text: str
-    creator: str = ""
-    thumbnail_url: str = ""
-
-
-class ImportLinksResponse(BaseModel):
-    imported: List[ImportedPost]
-    skipped: List[str] = []
+__all__ = [
+    "BudgetSignal",
+    "PaceSignal",
+    "NormalizedPost",
+    "ExtractedPost",
+    "ExtractRequest",
+    "ExtractResponse",
+    "CandidatePlace",
+    "PreferenceProfile",
+    "TripConstraints",
+    "ItineraryItem",
+    "ItineraryDay",
+    "TripPlan",
+    "GenerateTripRequest",
+    "ReviseTripRequest",
+]
