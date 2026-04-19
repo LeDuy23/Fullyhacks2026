@@ -10,7 +10,7 @@
 <script>
   (function(){
     var s=document.createElement('script');
-    s.src='https://maps.googleapis.com/maps/api/js?key='+(window.GOOGLE_MAPS_API_KEY||'');
+    s.src='https://maps.googleapis.com/maps/api/js?key='+(window.GOOGLE_MAPS_API_KEY||'')+'&libraries=places';
     document.head.appendChild(s);
   })();
 </script>
@@ -33,7 +33,7 @@ button{font-family:'Nunito',sans-serif;cursor:pointer;border:none;background:non
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 /* ─── COLOR TOKENS ─── */
 const C = {
@@ -44,6 +44,746 @@ const C = {
   glass:'rgba(255,255,255,0.06)', glassBr:'rgba(255,255,255,0.1)',
   glassBd:'rgba(255,255,255,0.13)', glassCard:'rgba(8,22,50,0.7)',
 };
+
+/* ─── API (FastAPI backend) ─── */
+function getApiBase() {
+  const b = (typeof window !== 'undefined' && window.API_BASE_URL) || '';
+  return String(b).replace(/\/$/, '') || 'http://127.0.0.1:8000';
+}
+
+function parseErrorDetail(detail) {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail))
+    return detail.map((x) => (x.msg || x.message || JSON.stringify(x))).join('; ');
+  if (detail && typeof detail === 'object') return detail.detail || JSON.stringify(detail);
+  return 'Request failed';
+}
+
+/** Strip invisible chars / odd whitespace so pasted mobile links still match. */
+function normalizeTextForUrlSearch(s) {
+  return String(s || '')
+    .replace(/\uFEFF/g, '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[\u200C-\u200F\u202A-\u202E]/g, '') // bidi / format chars (often appended by Instagram, etc.)
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim();
+}
+
+function stripTrailingUrlJunk(url) {
+  return String(url || '')
+    .replace(/[\u200C-\u200F\u202A-\u202E\uFEFF]+$/g, '')
+    .replace(/[.,);'"\]]+$/, '')
+    .trim();
+}
+
+function ensureHttpScheme(url) {
+  let u = stripTrailingUrlJunk(url);
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u.replace(/^\/+/, '');
+  return u;
+}
+
+/**
+ * First social URL in pasted text (Instagram reels, TikTok, short links).
+ * Handles scheme-less URLs (vm.tiktok.com/…), zero-width chars, and line breaks around the link.
+ * Instagram often appends ?igsh=… (base64 may end with ==); we take https→first whitespace so the full query survives.
+ */
+function firstUrlInText(s) {
+  const t = normalizeTextForUrlSearch(s);
+  if (!t) return '';
+
+  const httpAt = t.search(/\bhttps?:\/\//i);
+  if (httpAt >= 0) {
+    const fromHttp = t.slice(httpAt);
+    const sp = fromHttp.search(/\s/);
+    const chunk = sp < 0 ? fromHttp : fromHttp.slice(0, sp);
+    const u = stripTrailingUrlJunk(chunk);
+    if (/^https?:\/\//i.test(u)) return u;
+  }
+
+  let m = t.match(/\b(?:www\.|m\.)?(?:vm\.|vt\.)?tiktok\.com[^\s<>"']*/i);
+  if (m) return ensureHttpScheme(m[0]);
+
+  m = t.match(/\b(?:www\.)?tiktok\.com\/@[^\s/]+\/video\/\d+[^\s<>"']*/i);
+  if (m) return ensureHttpScheme(m[0]);
+
+  m = t.match(/\b(?:www\.)?tiktok\.com\/t\/[^\s<>"']+/i);
+  if (m) return ensureHttpScheme(m[0]);
+
+  m = t.match(/\b(?:www\.|m\.)?(?:instagram\.com|instagr\.am)\/[^\s<>"']+/i);
+  if (m) return ensureHttpScheme(m[0]);
+
+  return '';
+}
+function inferSocialPlatformFromUrl(url) {
+  const u = String(url || '').toLowerCase();
+  if (/tiktok\.com|vm\.tiktok|vt\.tiktok/.test(u)) return 'tiktok';
+  if (/instagram\.com|instagr\.am/.test(u)) return 'instagram';
+  return 'other';
+}
+
+/** Google Maps share / place links — resolved server-side via Places, no video pipeline. */
+function isGoogleMapsUrl(url) {
+  const u = String(url || '').toLowerCase();
+  return /goo\.gl\/maps|maps\.app\.goo\.gl|\/maps\/place|maps\.google|google\.com\/maps/.test(u);
+}
+
+/** TikTok / Instagram reel URLs and Maps links use async POST /api/jobs + poll (reel-to-map pipeline). */
+function useReelJobPipelineForUrl(url) {
+  if (!url) return false;
+  if (isGoogleMapsUrl(url)) return true;
+  const p = inferSocialPlatformFromUrl(url);
+  return p === 'tiktok' || p === 'instagram';
+}
+
+async function pollReelExtractionJob(jobId) {
+  const delayMs = 2000;
+  const maxAttempts = 90;
+  for (let i = 0; i < maxAttempts; i++) {
+    const j = await apiFetchJson(`/api/jobs/${jobId}`);
+    if (j.status === 'done' && j.result && j.result.extract) return j;
+    if (j.status === 'failed') throw new Error(j.error || 'Extraction failed');
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  throw new Error('Still processing — try again in a minute.');
+}
+
+const LS_USER_LISTS = 'dd_user_lists';
+const LS_USER_SPOTS = 'dd_user_spots';
+
+const DEFAULT_USER_LISTS = [
+  { id: 'l1', name: 'Favorites', icon: '⭐', color: '#ffc277' },
+  { id: 'l2', name: 'Bucket List', icon: '🌊', color: '#00e5d4' },
+  { id: 'l3', name: 'Wrecks', icon: '⚓', color: '#a78bfa' },
+];
+
+const DEMO_USER_SPOTS = [
+  { id: 'd1', name: 'Coral Gardens', loc: 'Raja Ampat', emoji: '🐠', color: '#ff6e7a', listId: 'l1', lat: -0.7, lng: 130.9 },
+  { id: 'd2', name: 'Blue Hole', loc: 'Belize', emoji: '🌀', color: '#00e5d4', listId: 'l2', lat: 17.3, lng: -87.5 },
+  { id: 'd3', name: 'Manta Point', loc: 'Komodo', emoji: '🦈', color: '#6fd8be', listId: 'l1', lat: -8.6, lng: 119.5 },
+  { id: 'd4', name: 'Cenote Dos Ojos', loc: 'Mexico', emoji: '💧', color: '#a78bfa', listId: 'l2', lat: 20.3, lng: -87.4 },
+  { id: 'd5', name: 'SS Thistlegorm', loc: 'Egypt', emoji: '⚓', color: '#ffc277', listId: 'l3', lat: 27.8, lng: 33.9 },
+];
+
+function loadJson(key, fallback) {
+  try {
+    const s = localStorage.getItem(key);
+    if (s == null || s === '') return fallback;
+    const p = JSON.parse(s);
+    return Array.isArray(p) ? p : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+function saveJson(key, val) {
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch (_) {}
+}
+
+/** Highest-confidence destination name (for map geocoding hints). */
+function bestDestinationFromExtractRow(row) {
+  const d = row?.destination_candidates || [];
+  if (!d.length) return '';
+  const sorted = [...d].sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+  const top = sorted[0];
+  return top && top.name ? String(top.name) : '';
+}
+
+/** Pull place rows from /extract results; prefer food venues when the model labels types. */
+function pickPlacesFromExtract(data) {
+  const row = data?.results && data.results[0];
+  if (!row) return { places: [], destinationHint: '' };
+  const dest = bestDestinationFromExtractRow(row);
+  const places = row.place_candidates || [];
+  const foodRe = /restaurant|cafe|coffee|bar|food|dining|bistro|eatery|bakery|pizza|sushi|grill|pub|brunch/i;
+  const foodPlaces = places.filter((p) => foodRe.test(p.type || '') || foodRe.test(p.name || ''));
+  const take = foodPlaces.length ? foodPlaces : places;
+  return {
+    destinationHint: dest,
+    places: take.slice(0, 12).map((p) => ({
+      name: p.name,
+      type: p.type || 'place',
+      confidence: p.confidence,
+      reason: p.reason || '',
+    })),
+  };
+}
+
+/** Full extractor output (matches backend ExtractedPost) for the results panel. */
+function ExtractInsightsSummary({ row }) {
+  if (!row) return null;
+  const travelOk = row.is_travel_relevant !== false;
+  const dests = row.destination_candidates || [];
+  const activities = row.activities || [];
+  const vibes = row.vibe_tags || [];
+  const times = row.best_time_of_day || [];
+  const budget = row.budget_signal || 'unknown';
+  const pace = row.pace_signal || 'unknown';
+  const notes = (row.notes || '').trim();
+  const chipStyle = (bg) => ({
+    display:'inline-block', padding:'4px 10px', borderRadius:99, fontSize:11, fontWeight:700,
+    background: bg || 'rgba(0,229,212,0.15)', color: C.biolume, marginRight:6, marginBottom:6,
+  });
+  return (
+    <div
+      data-testid="addspots-extract-insights"
+      style={{
+        marginBottom:14, padding:14, borderRadius:16,
+        background: travelOk ? 'rgba(0,229,212,0.06)' : 'rgba(255,110,122,0.08)',
+        border: `1px solid ${travelOk ? 'rgba(0,229,212,0.25)' : 'rgba(255,110,122,0.35)'}`,
+      }}
+    >
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, flexWrap:'wrap', gap:8 }}>
+        <span style={{ color:C.biolume, fontSize:12, fontWeight:800, letterSpacing:0.4 }}>AI extraction</span>
+        <span style={{
+          fontSize:11, fontWeight:800, padding:'4px 10px', borderRadius:99,
+          background: travelOk ? 'rgba(0,229,212,0.2)' : 'rgba(255,110,122,0.2)',
+          color: travelOk ? C.biolume : '#ffb3bc',
+        }}>{travelOk ? 'Travel signal: strong' : 'Travel signal: weak'}</span>
+      </div>
+      {dests.length > 0 && (
+        <div style={{ marginBottom:10 }}>
+          <div style={{ color:C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Destinations</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+            {dests.map((d, i) => (
+              <span key={i} style={{
+                fontSize:12, color:'white', fontWeight:700,
+                padding:'6px 10px', borderRadius:10, background:'rgba(255,255,255,0.08)', border:`1px solid ${C.glassBd}`,
+              }}>
+                {d.name}
+                {d.confidence != null ? <span style={{ color:C.textMut, fontWeight:600, marginLeft:6 }}>{Math.round((d.confidence || 0) * 100)}%</span> : null}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {(activities.length > 0 || vibes.length > 0) && (
+        <div style={{ marginBottom:10 }}>
+          {activities.length > 0 && (
+            <div style={{ marginBottom:8 }}>
+              <div style={{ color:C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Activities</div>
+              <div>{activities.map((a, i) => (
+                <span key={`act-${i}`} style={chipStyle('rgba(0,229,212,0.12)')}>{a}</span>
+              ))}</div>
+            </div>
+          )}
+          {vibes.length > 0 && (
+            <div>
+              <div style={{ color:C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Vibes</div>
+              <div>{vibes.map((v, i) => (
+                <span key={`vibe-${i}`} style={{...chipStyle('rgba(167,139,250,0.15)'), color: '#d4c4f5'}}>{v}</span>
+              ))}</div>
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom: notes ? 10 : 0 }}>
+        <div style={{ padding:8, borderRadius:10, background:'rgba(0,0,0,0.2)', fontSize:11 }}>
+          <div style={{ color:C.textMut, marginBottom:4 }}>Best time</div>
+          <div style={{ color:'white', fontWeight:700 }}>{times.length ? times.join(', ') : '—'}</div>
+        </div>
+        <div style={{ padding:8, borderRadius:10, background:'rgba(0,0,0,0.2)', fontSize:11 }}>
+          <div style={{ color:C.textMut, marginBottom:4 }}>Budget</div>
+          <div style={{ color:'white', fontWeight:700 }}>{budget}</div>
+        </div>
+        <div style={{ padding:8, borderRadius:10, background:'rgba(0,0,0,0.2)', fontSize:11 }}>
+          <div style={{ color:C.textMut, marginBottom:4 }}>Pace</div>
+          <div style={{ color:'white', fontWeight:700 }}>{pace}</div>
+        </div>
+      </div>
+      {notes ? (
+        <div style={{ marginTop:10, padding:10, borderRadius:10, background:'rgba(255,255,255,0.04)', fontSize:12, color:C.textSec, lineHeight:1.45 }}>
+          <span style={{ color:C.biolume, fontWeight:800, fontSize:10, display:'block', marginBottom:6 }}>Notes</span>
+          {notes}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Saved from onboarding: age, trip intent, explore style ids (pins, list, guides, wing). */
+function loadUserProfile() {
+  try {
+    return {
+      age: localStorage.getItem('dd_profile_age') || '',
+      trip: localStorage.getItem('dd_profile_trip') || '',
+      styles: JSON.parse(localStorage.getItem('dd_profile_styles') || '[]'),
+    };
+  } catch (_) {
+    return { age: '', trip: '', styles: [] };
+  }
+}
+
+function personalityNearbyHint(styles) {
+  const s = new Set(styles || []);
+  if (s.has('wing')) {
+    return 'Leaning into nightlife, bars & live energy — matches your drift-with-the-current vibe.';
+  }
+  if (s.has('guides')) {
+    return 'Restaurants & standout attractions — fits how you like expert-led exploring.';
+  }
+  if (s.has('list')) {
+    return 'Cafés, bakeries & date-worthy spots — great for building your treasure list.';
+  }
+  if (s.has('pins')) {
+    return 'Casual food & easygoing hangouts — works with your map-first, pin-dropping style.';
+  }
+  return 'Food & entertainment near you — we will tune picks more as you finish onboarding styles.';
+}
+
+/** Map onboarding “How do you explore?” to Google Places types (nearby). */
+function nearbyPlaceTypesForProfile(profile) {
+  const st = new Set(profile.styles || []);
+  const food = [];
+  const fun = [];
+  if (st.has('wing')) {
+    food.push('meal_takeaway', 'restaurant');
+    fun.push('night_club', 'bar');
+  }
+  if (st.has('guides')) {
+    food.push('restaurant');
+    fun.push('tourist_attraction', 'movie_theater');
+  }
+  if (st.has('list')) {
+    food.push('cafe', 'bakery');
+    fun.push('movie_theater');
+  }
+  if (st.has('pins')) {
+    food.push('restaurant', 'meal_takeaway');
+    fun.push('park', 'tourist_attraction');
+  }
+  if (food.length === 0) {
+    food.push('restaurant', 'cafe');
+  }
+  if (fun.length === 0) {
+    fun.push('bar', 'movie_theater', 'tourist_attraction');
+  }
+  const uniq = (a) => [...new Set(a)].slice(0, 4);
+  return { food: uniq(food), fun: uniq(fun) };
+}
+
+function haversineKm(a, b) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const x =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+/**
+ * Nearby food + entertainment via Google Places (requires Maps JS + places library + API key).
+ */
+function fetchNearbyFoodAndFun(lat, lng, profile) {
+  return new Promise((resolve, reject) => {
+    if (!window.google || !google.maps || !google.maps.places) {
+      reject(new Error('Places library not loaded'));
+      return;
+    }
+    const { food, fun } = nearbyPlaceTypesForProfile(profile);
+    const buckets = [
+      ...food.map((type) => ({ type, bucket: 'food' })),
+      ...fun.map((type) => ({ type, bucket: 'fun' })),
+    ];
+    const center = new google.maps.LatLng(lat, lng);
+    const map = new google.maps.Map(document.createElement('div'));
+    const service = new google.maps.places.PlacesService(map);
+    const radius = 4500;
+    const OK = google.maps.places.PlacesServiceStatus.OK;
+
+    Promise.all(
+      buckets.map(
+        (b) =>
+          new Promise((res) => {
+            service.nearbySearch({ location: center, radius, type: b.type }, (results, status) => {
+              if (status !== OK || !results) {
+                res([]);
+                return;
+              }
+              res(
+                results.map((p) => ({
+                  place: p,
+                  bucket: b.bucket,
+                  queryType: b.type,
+                })),
+              );
+            });
+          }),
+      ),
+    )
+      .then((groups) => {
+        const flat = groups.flat();
+        const seen = new Set();
+        const rows = [];
+        for (const { place: p, bucket } of flat) {
+          if (!p.geometry || !p.geometry.location) continue;
+          const id = p.place_id || p.name + (p.vicinity || '');
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const plat = p.geometry.location.lat();
+          const plng = p.geometry.location.lng();
+          const km = Math.round(haversineKm({ lat, lng }, { lat: plat, lng: plng }) * 10) / 10;
+          rows.push({
+            id,
+            name: p.name,
+            rating: p.rating,
+            vicinity: p.vicinity || '',
+            km,
+            bucket,
+          });
+        }
+        rows.sort((a, b) => a.km - b.km);
+        const foodRows = rows.filter((r) => r.bucket === 'food').slice(0, 10);
+        const funRows = rows.filter((r) => r.bucket === 'fun').slice(0, 10);
+        resolve({ food: foodRows, fun: funRows });
+      })
+      .catch(reject);
+  });
+}
+
+/** Places Autocomplete — cities, regions, and named places (requires Places library). */
+function fetchDestinationPredictions(input) {
+  return new Promise((resolve) => {
+    const q = String(input || '').trim();
+    if (q.length < 2) {
+      resolve([]);
+      return;
+    }
+    if (!window.google || !google.maps || !google.maps.places) {
+      resolve([]);
+      return;
+    }
+    const svc = new google.maps.places.AutocompleteService();
+    const OK = google.maps.places.PlacesServiceStatus.OK;
+    svc.getPlacePredictions({ input: q }, (predictions, status) => {
+      if (status !== OK || !predictions) {
+        resolve([]);
+        return;
+      }
+      resolve(
+        predictions.slice(0, 10).map((p) => ({
+          place_id: p.place_id,
+          description: p.description,
+          main_text: p.structured_formatting.main_text,
+          secondary_text: (p.structured_formatting.secondary_text || '').trim(),
+        })),
+      );
+    });
+  });
+}
+
+/**
+ * “Popular destinations” via Text Search (global). Returns null to signal static-list fallback.
+ */
+function fetchPopularDestinationsFromGoogle() {
+  return new Promise((resolve) => {
+    if (!window.google || !google.maps || !google.maps.places) {
+      resolve(null);
+      return;
+    }
+    const map = new google.maps.Map(document.createElement('div'));
+    const service = new google.maps.places.PlacesService(map);
+    const OK = google.maps.places.PlacesServiceStatus.OK;
+    service.textSearch(
+      { query: 'famous travel destinations cities islands beaches worldwide' },
+      (results, status) => {
+        if (status !== OK || !results || results.length === 0) {
+          resolve(null);
+          return;
+        }
+        resolve(
+          results.slice(0, 12).map((r) => ({
+            key: r.place_id || r.name,
+            name: r.name,
+            country: r.formatted_address || '',
+            placeId: r.place_id,
+            source: 'google',
+          })),
+        );
+      },
+    );
+  });
+}
+
+function getLatLngFromPlaceId(placeId) {
+  return new Promise((resolve) => {
+    if (!window.google || !google.maps || !google.maps.places) {
+      resolve(null);
+      return;
+    }
+    const map = new google.maps.Map(document.createElement('div'));
+    const service = new google.maps.places.PlacesService(map);
+    const OK = google.maps.places.PlacesServiceStatus.OK;
+    service.getDetails({ placeId, fields: ['geometry'] }, (place, status) => {
+      if (status !== OK || !place?.geometry?.location) {
+        resolve(null);
+        return;
+      }
+      resolve({
+        lat: place.geometry.location.lat(),
+        lng: place.geometry.location.lng(),
+      });
+    });
+  });
+}
+
+function fetchYouMayLikeNearLocation(lat, lng) {
+  return new Promise((resolve) => {
+    if (!window.google || !google.maps || !google.maps.places) {
+      resolve([]);
+      return;
+    }
+    const center = new google.maps.LatLng(lat, lng);
+    const map = new google.maps.Map(document.createElement('div'));
+    const service = new google.maps.places.PlacesService(map);
+    const radius = 8500;
+    const types = ['restaurant', 'tourist_attraction', 'cafe', 'bar', 'park'];
+    const OK = google.maps.places.PlacesServiceStatus.OK;
+    Promise.all(
+      types.map(
+        (type) =>
+          new Promise((res) => {
+            service.nearbySearch({ location: center, radius, type }, (results, status) => {
+              if (status !== OK || !results) {
+                res([]);
+                return;
+              }
+              res(results);
+            });
+          }),
+      ),
+    ).then((groups) => {
+      const seen = new Set();
+      const out = [];
+      for (const r of groups.flat()) {
+        if (!r.place_id || seen.has(r.place_id)) continue;
+        seen.add(r.place_id);
+        out.push({
+          place_id: r.place_id,
+          name: r.name,
+          rating: r.rating,
+          user_ratings_total: r.user_ratings_total,
+          vicinity: r.vicinity || '',
+          types: r.types || [],
+        });
+      }
+      out.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      resolve(out.slice(0, 14));
+    });
+  });
+}
+
+function fetchGooglePlaceDetails(placeId) {
+  return new Promise((resolve, reject) => {
+    if (!window.google || !google.maps || !google.maps.places) {
+      reject(new Error('Places not loaded'));
+      return;
+    }
+    const map = new google.maps.Map(document.createElement('div'));
+    const service = new google.maps.places.PlacesService(map);
+    const OK = google.maps.places.PlacesServiceStatus.OK;
+    service.getDetails(
+      {
+        placeId,
+        fields: [
+          'name',
+          'rating',
+          'user_ratings_total',
+          'formatted_address',
+          'formatted_phone_number',
+          'opening_hours',
+          'reviews',
+          'website',
+          'types',
+          'price_level',
+          'url',
+          'business_status',
+        ],
+      },
+      (place, status) => {
+        if (status !== OK || !place) {
+          reject(new Error(String(status)));
+          return;
+        }
+        resolve(place);
+      },
+    );
+  });
+}
+
+function placeTypesEmoji(types) {
+  const t = (types || []).join(' ').toLowerCase();
+  if (t.includes('restaurant') || t.includes('food')) return '🍽️';
+  if (t.includes('cafe')) return '☕';
+  if (t.includes('bar')) return '🍸';
+  if (t.includes('tourist')) return '🎯';
+  if (t.includes('park')) return '🌳';
+  return '📍';
+}
+
+function isFoodLikeTypes(types) {
+  const t = (types || []).join(' ').toLowerCase();
+  return (
+    t.includes('restaurant') ||
+    t.includes('food') ||
+    t.includes('cafe') ||
+    t.includes('meal') ||
+    t.includes('bakery') ||
+    t.includes('bar')
+  );
+}
+
+function yelpSearchUrl(name, address) {
+  const findDesc = encodeURIComponent(name || 'restaurants');
+  const findLoc = encodeURIComponent(address || '');
+  return `https://www.yelp.com/search?find_desc=${findDesc}&find_loc=${findLoc}`;
+}
+
+/** Embedded fallback if API + trip-interests.json are unavailable. */
+const TRIP_INTEREST_CATALOG_FALLBACK = [
+  { id: 'scuba', label: '🤿 Scuba diving', category: 'Ocean & diving' },
+  { id: 'snorkel', label: '🐠 Snorkeling', category: 'Ocean & diving' },
+  { id: 'whale', label: '🐋 Whale watching', category: 'Nature & wildlife' },
+  { id: 'coral', label: '🪸 Coral reefs', category: 'Nature & wildlife' },
+  { id: 'white_sand', label: '🏖️ White-sand beaches', category: 'Beaches & islands' },
+  { id: 'seafood', label: '🦞 Local seafood', category: 'Food & drink' },
+  { id: 'street_food', label: '🍜 Street food & markets', category: 'Food & drink' },
+  { id: 'unesco', label: '🏛️ UNESCO & heritage sites', category: 'Culture & sights' },
+  { id: 'slow', label: '🐢 Slow travel & relaxed pace', category: 'Trip style & pace' },
+  { id: 'eco', label: '🌱 Eco-conscious travel', category: 'Trip style & pace' },
+  { id: 'sail', label: '⛵ Sailing', category: 'Surface & water sports' },
+  { id: 'surf', label: '🏄 Surfing', category: 'Surface & water sports' },
+];
+
+async function loadTripInterestCatalog() {
+  const parse = (data) => {
+    const arr = data && data.interests;
+    return Array.isArray(arr) && arr.length ? arr : null;
+  };
+  try {
+    const r = await fetch(`${getApiBase()}/trip-interests`);
+    if (r.ok) {
+      const data = await r.json();
+      const list = parse(data);
+      if (list) return list;
+    }
+  } catch (_) {}
+  try {
+    const r2 = await fetch(new URL('trip-interests.json', window.location.href).href, { cache: 'no-store' });
+    if (r2.ok) {
+      const data = await r2.json();
+      const list = parse(data);
+      if (list) return list;
+    }
+  } catch (_) {}
+  return TRIP_INTEREST_CATALOG_FALLBACK;
+}
+
+async function apiFetchJson(path, options = {}) {
+  const url = `${getApiBase()}${path.startsWith('/') ? path : `/${path}`}`;
+  const res = await fetch(url, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch (_) {
+    if (!res.ok) throw new Error(text || res.statusText);
+  }
+  if (!res.ok) throw new Error(parseErrorDetail(data?.detail) || data?.message || res.statusText);
+  return data;
+}
+
+function computeTripDays(dateFrom, dateTo) {
+  if (!dateFrom || !dateTo) return 4;
+  const a = new Date(dateFrom);
+  const b = new Date(dateTo);
+  const d = Math.round((b - a) / 86400000) + 1;
+  return Math.min(14, Math.max(1, d));
+}
+
+function roughCenterForDestination(name) {
+  let h = 0;
+  const s = String(name || 'trip');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return [20 + (h % 200) / 50 - 2, 10 + ((h >> 8) % 200) / 50 - 2];
+}
+
+function mapPlanFromPostsToTrip(data, destName) {
+  const apiTrip = data.trip;
+  const places = data.candidate_places || [];
+  const pins = [];
+  let center = null;
+  for (const p of places) {
+    if (p.lat != null && p.lng != null) {
+      pins.push([p.lat, p.lng, p.name]);
+      if (!center) center = [p.lat, p.lng];
+    }
+  }
+  if (!center) center = roughCenterForDestination(apiTrip.destination || destName);
+  let idx = 0;
+  for (const day of apiTrip.days || []) {
+    for (const it of day.items || []) {
+      if (pins.length < 16) {
+        const [lat, lng] = center;
+        pins.push([lat + (idx % 6) * 0.015, lng + (idx / 6) * 0.015, it.name]);
+        idx++;
+      }
+    }
+  }
+  const spots = (apiTrip.days || []).reduce((n, d) => n + (d.items?.length || 0), 0);
+  return {
+    id: Date.now(),
+    title: apiTrip.destination || destName,
+    loc: apiTrip.destination || destName,
+    days: (apiTrip.days || []).length || 1,
+    spots: spots || 1,
+    color: '#6fd8be',
+    center,
+    zoom: 12,
+    pins,
+    tripPlan: apiTrip,
+    aiSummary: apiTrip.summary,
+    planningNotes: apiTrip.planning_notes || [],
+    candidatePlaces: places,
+  };
+}
+
+async function planFromPostsRequest(ctx) {
+  const days = computeTripDays(ctx.dateFrom, ctx.dateTo);
+  const interestLine = Array.from(ctx.interests || []).join(', ');
+  const raw = [ctx.dest, interestLine].filter(Boolean).join('. ');
+  const body = {
+    posts: [
+      {
+        post_id: `ui-${Date.now()}`,
+        url: 'https://deepdive.app/plan',
+        platform: 'other',
+        caption: ctx.dest,
+        transcript: '',
+        ocr_text: '',
+        thumbnail_text: '',
+        raw_text: raw || ctx.dest,
+      },
+    ],
+    trip_constraints: {
+      days,
+      budget: 'medium',
+      pace: 'moderate',
+      group_type: 'friends',
+      must_include: [],
+      avoid: [],
+      transport_mode: 'public_transit',
+    },
+  };
+  return apiFetchJson('/plan-from-posts', { method: 'POST', body: JSON.stringify(body) });
+}
 
 /* ─── MASCOT SVGs ─── */
 function OllieOctopus({size=120, expression='happy', hat=true}) {
@@ -314,7 +1054,7 @@ function OnboardAgeScreen({onNext, onBack}) {
           </button>
         ))}
       </div>
-      <button onClick={()=>sel&&onNext()} style={{
+      <button type="button" data-testid="onboard-age-continue" onClick={()=>{ if(sel){ try{ localStorage.setItem('dd_profile_age', sel); }catch(_){} onNext(); } }} style={{
         marginTop:20,padding:'16px',borderRadius:16,fontSize:16,fontWeight:800,
         background:sel?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.1)',
         color:sel?C.deep:'rgba(255,255,255,0.3)',transition:'all 0.3s',
@@ -360,7 +1100,7 @@ function OnboardTripScreen({onNext, onBack}) {
           </button>
         ))}
       </div>
-      <button onClick={()=>sel&&onNext()} style={{
+      <button type="button" data-testid="onboard-trip-continue" onClick={()=>{ if(sel){ try{ localStorage.setItem('dd_profile_trip', sel); }catch(_){} onNext(); } }} style={{
         padding:'16px',borderRadius:16,fontSize:16,fontWeight:800,
         background:sel?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.1)',
         color:sel?C.deep:'rgba(255,255,255,0.3)',transition:'all 0.3s',
@@ -413,7 +1153,7 @@ function OnboardStyleScreen({onNext, onBack}) {
           );
         })}
       </div>
-      <button onClick={()=>onNext()} style={{
+      <button type="button" data-testid="onboard-style-continue" onClick={()=>{ try{ localStorage.setItem('dd_profile_styles', JSON.stringify([...sel])); }catch(_){} onNext(); }} style={{
         marginTop:20,padding:'16px',borderRadius:16,fontSize:16,fontWeight:800,
         background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
         boxShadow:'0 0 30px rgba(0,229,212,0.4)',cursor:'pointer',
@@ -467,34 +1207,170 @@ const ALL_DESTINATIONS = [
 ];
 
 /* ─── PLAN TRIP PANEL ─── */
-function PlanTripPanel({onClose, onDone}) {
-  const [dest, setDest] = useState('');
+function PlanTripPanel({ onClose, onPlan, initialDest = '' }) {
+  const [dest, setDest] = useState(initialDest);
+  const skipPredRef = useRef(false);
+  const [predictions, setPredictions] = useState([]);
+  const [popularRows, setPopularRows] = useState(null);
+  const [popularLoading, setPopularLoading] = useState(true);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [showCal, setShowCal] = useState(false);
   const [calMonth, setCalMonth] = useState(()=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth(),1);});
   const [interests, setInterests] = useState(new Set());
+  const [interestCatalog, setInterestCatalog] = useState([]);
+  const [interestsCatalogLoading, setInterestsCatalogLoading] = useState(true);
+  const [interestPickerOpen, setInterestPickerOpen] = useState(false);
+  const [interestSearch, setInterestSearch] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
   const fmt = (d) => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
-  const intOpts = ['🤿 Diving','🐠 Snorkeling','🏖️ Beaches','🦈 Wildlife','🍣 Food','🎨 Culture','⛵ Sailing'];
+
+  const interestGroupsFiltered = useMemo(() => {
+    const q = interestSearch.trim().toLowerCase();
+    const items = !q
+      ? interestCatalog
+      : interestCatalog.filter((it) => String(it.label || '').toLowerCase().includes(q));
+    const m = new Map();
+    for (const it of items) {
+      const c = it.category || 'Other';
+      if (!m.has(c)) m.set(c, []);
+      m.get(c).push(it);
+    }
+    return Array.from(m.entries());
+  }, [interestCatalog, interestSearch]);
+
+  const toggleInterestLabel = (label) => {
+    setInterests((s) => {
+      const n = new Set(s);
+      if (n.has(label)) n.delete(label);
+      else n.add(label);
+      return n;
+    });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPopular = async () => {
+      setPopularLoading(true);
+      let attempts = 0;
+      while (!cancelled && attempts < 40 && (!window.google || !google.maps?.places)) {
+        await new Promise((r) => setTimeout(r, 150));
+        attempts += 1;
+      }
+      if (cancelled) return;
+      const g = await fetchPopularDestinationsFromGoogle();
+      if (cancelled) return;
+      if (g && g.length > 0) {
+        setPopularRows(g);
+      } else {
+        setPopularRows(
+          ALL_DESTINATIONS.map((t) => ({
+            key: t.name,
+            name: t.name,
+            country: t.country,
+            flag: t.flag,
+            source: 'static',
+          })),
+        );
+      }
+      setPopularLoading(false);
+    };
+    loadPopular();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setInterestsCatalogLoading(true);
+      const list = await loadTripInterestCatalog();
+      if (!cancelled) {
+        setInterestCatalog(list);
+        setInterestsCatalogLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (skipPredRef.current) {
+      skipPredRef.current = false;
+      setPredictions([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      const q = dest.trim();
+      if (q.length < 2) {
+        setPredictions([]);
+        return;
+      }
+      fetchDestinationPredictions(q).then(setPredictions);
+    }, 380);
+    return () => clearTimeout(t);
+  }, [dest]);
+
+  const applyPopularRow = (row) => {
+    skipPredRef.current = true;
+    if (row.source === 'static' || row.flag) {
+      setDest(row.name);
+      return;
+    }
+    const addr = row.country || '';
+    setDest(addr ? `${row.name}, ${addr}` : row.name);
+  };
+
+  const runPlan = async () => {
+    if (!dest || loading) return;
+    setErr('');
+    setLoading(true);
+    try {
+      await onPlan({ dest, dateFrom, dateTo, interests });
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <div style={{height:'100%',display:'flex',flexDirection:'column',background:`linear-gradient(180deg,${C.navy},${C.deep})`}}>
+    <div style={{height:'100%',display:'flex',flexDirection:'column',background:`linear-gradient(180deg,${C.navy},${C.deep})`,position:'relative'}}>
       <div style={{padding:'20px 20px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',
         borderBottom:`1px solid ${C.glassBd}`}}>
         <div>
           <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1}}>New Trip</div>
           <div style={{color:'white',fontSize:20,fontWeight:900,marginTop:2}}>Where to?</div>
         </div>
-        <button onClick={onClose} style={{color:C.textSec,fontSize:22,lineHeight:1}}>✕</button>
+        <button type="button" data-testid="plan-close" onClick={onClose} style={{color:C.textSec,fontSize:22,lineHeight:1}}>✕</button>
       </div>
       <div style={{flex:1,overflowY:'auto',padding:'20px'}}>
-        <div style={{position:'relative',marginBottom:12}}>
+        <div style={{position:'relative',marginBottom:12,zIndex:5}}>
           <div style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',fontSize:18}}>🔍</div>
-          <input value={dest} onChange={e=>setDest(e.target.value)} placeholder="Search destinations..."
+          <input data-testid="plan-destination-input" value={dest} onChange={(e)=>{ skipPredRef.current=false; setDest(e.target.value); }}
+            placeholder="Search cities & places (Google)…"
             style={{width:'100%',padding:'14px 14px 14px 44px',borderRadius:14,
               background:'rgba(255,255,255,0.07)',border:`1.5px solid ${C.glassBd}`,
               color:'white',fontSize:15,outline:'none',boxSizing:'border-box'}}/>
+          {dest.trim().length>=2 && predictions.length>0 && (
+            <div role="listbox" style={{
+              position:'absolute',left:0,right:0,top:'100%',marginTop:6,maxHeight:240,overflowY:'auto',
+              background:'rgba(8,18,36,0.98)',border:`1px solid ${C.biolume}66`,borderRadius:12,
+              boxShadow:'0 16px 40px rgba(0,0,0,0.45)',zIndex:20}}>
+              {predictions.map((p)=>(
+                <button key={p.place_id} type="button" role="option"
+                  onClick={()=>{ skipPredRef.current=true; setDest(p.description); setPredictions([]); }}
+                  style={{
+                    display:'block',width:'100%',textAlign:'left',padding:'12px 14px',cursor:'pointer',
+                    background:'transparent',border:'none',borderBottom:`1px solid ${C.glassBd}`,
+                    fontFamily:'inherit',
+                  }}>
+                  <div style={{color:'white',fontWeight:700,fontSize:14}}>{p.main_text}</div>
+                  <div style={{color:C.textSec,fontSize:12,marginTop:2,lineHeight:1.35}}>{p.secondary_text}</div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{padding:'14px 16px',borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`,
           display:'flex',alignItems:'center',gap:12,marginBottom:20,cursor:'pointer'}}>
@@ -505,48 +1381,77 @@ function PlanTripPanel({onClose, onDone}) {
           </div>
           <div style={{marginLeft:'auto',color:C.biolume,fontSize:18}}>›</div>
         </div>
-        <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>
-          {dest ? '🔍 Results' : '🔥 Popular Destinations'}
-        </div>
-        {(() => {
-          const filtered = dest
-            ? ALL_DESTINATIONS.filter(t=>t.name.toLowerCase().includes(dest.toLowerCase())||t.country.toLowerCase().includes(dest.toLowerCase()))
-            : ALL_DESTINATIONS;
-          const visible = (dest || showAll) ? filtered : filtered.slice(0,6);
-          return (<>
-            {visible.map(t=>(
-              <div key={t.name} onClick={()=>setDest(t.name)} style={{
-                display:'flex',alignItems:'center',gap:12,padding:'12px 16px',borderRadius:12,cursor:'pointer',
-                background:dest===t.name?'rgba(0,229,212,0.1)':'transparent',
-                border:`1px solid ${dest===t.name?C.biolume:'transparent'}`,
-                marginBottom:4,transition:'all 0.2s'}}>
-                <div style={{fontSize:28}}>{t.flag}</div>
-                <div>
-                  <div style={{color:'white',fontWeight:700,fontSize:15}}>{t.name}</div>
-                  <div style={{color:C.textSec,fontSize:12}}>{t.country}</div>
-                </div>
+        {dest.trim().length>=2 ? (
+          <>
+            <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>
+              🔍 Google suggestions
+            </div>
+            <div style={{color:C.textSec,fontSize:11,marginBottom:10}}>Pick a place from the list under the search box, or keep typing.</div>
+            {predictions.length===0 && (
+              <div style={{color:C.textSec,fontSize:13,marginBottom:12,lineHeight:1.45}}>
+                No matches yet — try a city, country, or landmark. Ensure Places API is enabled for your key.
               </div>
-            ))}
-            {!dest && !showAll && filtered.length>6 && (
-              <button onClick={()=>setShowAll(true)} style={{
-                display:'flex',alignItems:'center',justifyContent:'center',gap:6,
-                width:'100%',padding:'12px',borderRadius:12,marginTop:4,
-                background:'transparent',border:`1px dashed ${C.glassBd}`,
-                color:C.biolume,fontSize:13,fontWeight:700,cursor:'pointer'}}>
-                See {filtered.length-6} more ↓
-              </button>
             )}
-            {!dest && showAll && (
-              <button onClick={()=>setShowAll(false)} style={{
-                display:'flex',alignItems:'center',justifyContent:'center',gap:6,
-                width:'100%',padding:'12px',borderRadius:12,marginTop:4,
-                background:'transparent',border:`1px dashed ${C.glassBd}`,
-                color:C.textSec,fontSize:13,fontWeight:700,cursor:'pointer'}}>
-                Show less ↑
-              </button>
-            )}
-          </>);
-        })()}
+          </>
+        ) : (
+          <>
+            <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>
+              🔥 Popular destinations
+            </div>
+            <div style={{color:C.textSec,fontSize:11,marginBottom:10}}>
+              {popularLoading ? 'Loading…' : popularRows && popularRows[0]?.source === 'google' ? 'Powered by Google Places' : 'Curated list (Places unavailable or quota)'}
+            </div>
+            {popularLoading ? (
+              <div style={{color:C.textSec,fontSize:13,padding:'20px 0',textAlign:'center'}}>Finding popular spots…</div>
+            ) : (() => {
+              const list = popularRows || [];
+              const isStatic = list[0]?.source === 'static';
+              const visible = isStatic && !showAll ? list.slice(0, 6) : list;
+              return (<>
+                {visible.map((row)=>(
+                  <div key={row.key || row.name} onClick={()=>applyPopularRow(row)} style={{
+                    display:'flex',alignItems:'center',gap:12,padding:'12px 16px',borderRadius:12,cursor:'pointer',
+                    background:dest===row.name?'rgba(0,229,212,0.1)':'transparent',
+                    border:`1px solid ${dest===row.name?C.biolume:'transparent'}`,
+                    marginBottom:4,transition:'all 0.2s'}}>
+                    <div style={{fontSize:28}}>{row.flag || '🌍'}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{color:'white',fontWeight:700,fontSize:15}}>{row.name}</div>
+                      <div style={{color:C.textSec,fontSize:11,marginTop:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                        {row.country || ''}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {isStatic && !showAll && list.length > 6 && (
+                  <button type="button" onClick={()=>setShowAll(true)} style={{
+                    display:'flex',alignItems:'center',justifyContent:'center',gap:6,
+                    width:'100%',padding:'12px',borderRadius:12,marginTop:4,
+                    background:'transparent',border:`1px dashed ${C.glassBd}`,
+                    color:C.biolume,fontSize:13,fontWeight:700,cursor:'pointer'}}>
+                    See {list.length - 6} more ↓
+                  </button>
+                )}
+                {isStatic && showAll && list.length > 6 && (
+                  <button type="button" onClick={()=>setShowAll(false)} style={{
+                    display:'flex',alignItems:'center',justifyContent:'center',gap:6,
+                    width:'100%',padding:'12px',borderRadius:12,marginTop:4,
+                    background:'transparent',border:`1px dashed ${C.glassBd}`,
+                    color:C.textSec,fontSize:13,fontWeight:700,cursor:'pointer'}}>
+                    Show less ↑
+                  </button>
+                )}
+              </>);
+            })()}
+          </>
+        )}
+        {err && (
+          <div role="alert" style={{
+            marginTop:12,marginBottom:4,padding:'12px 14px',borderRadius:12,
+            background:'rgba(255,110,122,0.12)',border:'1px solid rgba(255,110,122,0.35)',
+            color:'#ffb3bc',fontSize:12,fontWeight:600,lineHeight:1.45,
+          }}>{err}</div>
+        )}
         {/* Date picker */}
         <div onClick={()=>setShowCal(!showCal)} style={{
           marginTop:16,padding:'14px 16px',borderRadius:14,background:C.glass,
@@ -615,118 +1520,682 @@ function PlanTripPanel({onClose, onDone}) {
         })()}
         {/* Interests */}
         <div style={{marginTop:12}}>
-          <div style={{padding:'14px 16px',borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`,
-            display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',marginBottom:8}}>
-            <span style={{color:'white',fontWeight:600}}>🎯 Preferences</span>
-            <span style={{color:C.biolume,fontWeight:700,fontSize:14}}>Add interests</span>
-          </div>
-          <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
-            {intOpts.map(i=>{
-              const on=interests.has(i);
-              return (
-                <button key={i} onClick={()=>setInterests(s=>{const n=new Set(s);n.has(i)?n.delete(i):n.add(i);return n;})}
-                  style={{padding:'7px 14px',borderRadius:99,fontSize:13,fontWeight:700,cursor:'pointer',transition:'all 0.2s',
-                    background:on?C.biolume:C.glass,color:on?C.deep:'white',
-                    border:`1px solid ${on?C.biolume:C.glassBd}`,
-                    boxShadow:on?'0 0 12px rgba(0,229,212,0.3)':'none'}}>{i}</button>
-              );
-            })}
+          <button
+            type="button"
+            data-testid="plan-open-interests"
+            onClick={() => { setInterestPickerOpen(true); setInterestSearch(''); }}
+            style={{
+              width:'100%',padding:'14px 16px',borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`,
+              display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',marginBottom:8,
+              fontFamily:'inherit',textAlign:'left',
+            }}
+          >
+            <span style={{color:'white',fontWeight:600}}>
+              🎯 Preferences
+              {interestsCatalogLoading ? (
+                <span style={{color:C.textSec,fontWeight:600,fontSize:12,marginLeft:8}}>(loading catalog…)</span>
+              ) : (
+                <span style={{color:C.textSec,fontWeight:600,fontSize:12,marginLeft:8}}>
+                  ({interestCatalog.length} options)
+                </span>
+              )}
+            </span>
+            <span style={{color:C.biolume,fontWeight:700,fontSize:14}}>
+              {interests.size ? `${interests.size} selected · Edit` : 'Add interests'}
+            </span>
+          </button>
+          {interests.size > 0 && (
+            <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:4}}>
+              {Array.from(interests).map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => toggleInterestLabel(label)}
+                  style={{
+                    padding:'6px 10px',borderRadius:99,fontSize:12,fontWeight:700,cursor:'pointer',
+                    background:'rgba(0,229,212,0.12)',color:C.biolume,
+                    border:`1px solid ${C.biolume}55`,fontFamily:'inherit',
+                  }}
+                >
+                  {label} <span style={{opacity:0.85}}>×</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div style={{color:C.textMut,fontSize:11,lineHeight:1.4}}>
+            Included in your plan request (API catalog or offline fallback).
           </div>
         </div>
       </div>
+      {interestPickerOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Choose trip interests"
+          style={{
+            position:'absolute',inset:0,zIndex:60,
+            display:'flex',flexDirection:'column',
+            background:`linear-gradient(180deg,${C.navy},${C.deep})`,
+          }}
+        >
+          <div style={{padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:`1px solid ${C.glassBd}`,flexShrink:0}}>
+            <button type="button" onClick={() => setInterestPickerOpen(false)} style={{background:'transparent',border:'none',color:C.biolume,fontSize:15,fontWeight:800,cursor:'pointer',fontFamily:'inherit'}}>← Back</button>
+            <div style={{color:'white',fontWeight:800,fontSize:16}}>Choose interests</div>
+            <button type="button" data-testid="plan-interests-done" onClick={() => setInterestPickerOpen(false)} style={{background:C.biolume,border:'none',borderRadius:10,padding:'8px 14px',color:C.deep,fontWeight:800,cursor:'pointer',fontFamily:'inherit'}}>Done</button>
+          </div>
+          <div style={{padding:'12px 16px',flexShrink:0}}>
+            <input
+              data-testid="plan-interests-search"
+              value={interestSearch}
+              onChange={(e) => setInterestSearch(e.target.value)}
+              placeholder="Search interests…"
+              style={{
+                width:'100%',padding:'12px 14px',borderRadius:12,
+                background:'rgba(255,255,255,0.07)',border:`1px solid ${C.glassBd}`,
+                color:'white',fontSize:14,outline:'none',boxSizing:'border-box',fontFamily:'inherit',
+              }}
+            />
+          </div>
+          <div style={{flex:1,overflowY:'auto',padding:'0 16px 20px',minHeight:0}}>
+            {interestGroupsFiltered.length === 0 ? (
+              <div style={{color:C.textSec,fontSize:13,padding:16}}>No matches. Try another search.</div>
+            ) : (
+              interestGroupsFiltered.map(([cat, items]) => (
+                <div key={cat} style={{marginBottom:18}}>
+                  <div style={{color:C.biolume,fontSize:11,fontWeight:800,textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>{cat}</div>
+                  <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+                    {items.map((it) => {
+                      const on = interests.has(it.label);
+                      return (
+                        <button
+                          key={it.id}
+                          type="button"
+                          onClick={() => toggleInterestLabel(it.label)}
+                          style={{
+                            padding:'8px 12px',borderRadius:99,fontSize:12,fontWeight:700,cursor:'pointer',
+                            background:on ? C.biolume : C.glass,
+                            color:on ? C.deep : 'white',
+                            border:`1px solid ${on ? C.biolume : C.glassBd}`,
+                            fontFamily:'inherit',
+                          }}
+                        >
+                          {it.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
       <div style={{padding:'16px 20px',borderTop:`1px solid ${C.glassBd}`}}>
-        <button onClick={()=>dest&&onDone()} style={{
-          width:'100%',padding:'16px',borderRadius:14,fontSize:16,fontWeight:800,cursor:'pointer',
-          background:dest?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.08)',
-          color:dest?C.deep:'rgba(255,255,255,0.3)',border:'none',transition:'all 0.3s',
-          boxShadow:dest?'0 0 30px rgba(0,229,212,0.35)':'none',
-        }}>🗺️ Plan This Trip</button>
+        <button type="button" onClick={runPlan} disabled={!dest||loading} style={{
+          width:'100%',padding:'16px',borderRadius:14,fontSize:16,fontWeight:800,cursor:!dest||loading?'default':'pointer',
+          background:dest&&!loading?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.08)',
+          color:dest&&!loading?C.deep:'rgba(255,255,255,0.3)',border:'none',transition:'all 0.3s',
+          boxShadow:dest&&!loading?'0 0 30px rgba(0,229,212,0.35)':'none',
+          opacity:loading?0.85:1,
+        }} data-testid="plan-submit">{loading ? 'Planning…' : '🗺️ Plan This Trip'}</button>
       </div>
     </div>
   );
 }
 
 /* ─── TRIP DETAIL ─── */
-function TripDetail({trip, onBack}) {
-  const [tab, setTab] = useState('overview');
+function activityTypeIcon(activityType) {
+  const t = String(activityType || '').toLowerCase();
+  if (t.includes('dive')) return '🤿';
+  if (t.includes('snorkel')) return '🐠';
+  if (t.includes('food') || t.includes('meal') || t.includes('eat')) return '🍽️';
+  if (t.includes('boat') || t.includes('sail')) return '⛵';
+  if (t.includes('beach') || t.includes('swim')) return '🏖️';
+  if (t.includes('photo')) return '📷';
+  if (t.includes('shop') || t.includes('market')) return '🛍️';
+  if (t.includes('hike') || t.includes('trek')) return '🥾';
+  if (t.includes('night')) return '🌙';
+  return '📍';
+}
+
+function openingHoursForPlaceId(placeId, candidatePlaces) {
+  const found = (candidatePlaces || []).find((p) => p.place_id === placeId);
+  return found && found.opening_hours ? String(found.opening_hours) : '';
+}
+
+function buildSyntheticTripPlan(trip) {
+  if (trip.tripPlan && Array.isArray(trip.tripPlan.days) && trip.tripPlan.days.length) {
+    return trip.tripPlan;
+  }
+  const pins = trip.pins || [];
+  const nDays = Math.max(1, Math.min(trip.days || 1, 14));
+  if (pins.length === 0) {
+    return { destination: trip.title, summary: '', days: [], planning_notes: [] };
+  }
+  const perDay = Math.max(1, Math.ceil(pins.length / nDays));
+  const days = [];
+  for (let d = 0; d < nDays; d++) {
+    const slice = pins.slice(d * perDay, (d + 1) * perDay);
+    if (slice.length === 0) break;
+    const items = slice.map(([lat, lng, name], i) => {
+      const hour = 9 + i * 2;
+      const time = `${String(Math.min(hour, 20)).padStart(2, '0')}:00`;
+      return {
+        time,
+        place_id: `pin-${d}-${i}`,
+        name,
+        activity_type: 'dive',
+        duration_minutes: 90,
+        why_included: 'Along your expedition route',
+      };
+    });
+    days.push({
+      day: d + 1,
+      area: trip.loc || 'Region',
+      theme: d === 0 ? 'Coastal & reefs' : `Day ${d + 1} route`,
+      items,
+      backup_options: [],
+    });
+  }
+  return {
+    destination: trip.title,
+    summary: trip.aiSummary || `Explore ${trip.loc} across ${days.length} days.`,
+    days,
+    planning_notes: trip.planningNotes || [],
+  };
+}
+
+function TripDayTimeline({ day, candidatePlaces, lineColor }) {
+  const items = day.items || [];
+  if (items.length === 0) {
+    return <div style={{ color: C.textSec, fontSize: 13 }}>No stops scheduled.</div>;
+  }
   return (
-    <div style={{height:'100%',display:'flex',flexDirection:'column',background:`linear-gradient(180deg,${C.navy},${C.deep})`}}>
-      <div style={{padding:'20px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-        <button onClick={onBack} style={{background:C.glass,border:`1px solid ${C.glassBd}`,borderRadius:99,
-          padding:'8px 14px',color:'white',fontWeight:700,fontSize:14,cursor:'pointer'}}>← Back</button>
-        <button style={{background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,border:'none',borderRadius:99,
-          padding:'8px 16px',color:C.deep,fontWeight:800,fontSize:13,cursor:'pointer'}}>💾 Save Trip</button>
-      </div>
-      {/* Mini map placeholder */}
-      <div style={{margin:'0 20px',height:160,borderRadius:18,overflow:'hidden',position:'relative',
-        background:`linear-gradient(135deg,${C.ocean},${C.mid})`,border:`1px solid ${C.glassBd}`}}>
-        <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{color:C.biolume,opacity:0.3,fontSize:80}}>🗺️</div>
-        </div>
-        {[{x:'25%',y:'40%'},{x:'45%',y:'35%'},{x:'60%',y:'55%'},{x:'75%',y:'45%'}].map((p,i)=>(
-          <div key={i} style={{position:'absolute',left:p.x,top:p.y,transform:'translate(-50%,-50%)'}}>
-            <div style={{width:24,height:24,borderRadius:'50%',background:C.biolume,display:'flex',alignItems:'center',
-              justifyContent:'center',fontSize:11,fontWeight:800,color:C.deep,
-              boxShadow:'0 0 12px rgba(0,229,212,0.6)'}}>{i+1}</div>
+    <div data-testid={`trip-day-${day.day}-timeline`}>
+      {items.map((it, idx) => {
+        const icon = activityTypeIcon(it.activity_type);
+        const hours = openingHoursForPlaceId(it.place_id, candidatePlaces);
+        const last = idx === items.length - 1;
+        return (
+          <div key={`${it.place_id}-${idx}`} style={{ display: 'flex', gap: 14, alignItems: 'stretch' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 48, flexShrink: 0 }}>
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: '50%',
+                  background: `linear-gradient(145deg, ${lineColor}35, ${C.glass})`,
+                  border: `2px solid ${lineColor}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 22,
+                  boxShadow: `0 0 18px ${lineColor}55`,
+                  zIndex: 2,
+                }}
+              >
+                {icon}
+              </div>
+              {!last && (
+                <div
+                  style={{
+                    width: 4,
+                    height: 40,
+                    marginTop: 4,
+                    borderRadius: 2,
+                    background: `linear-gradient(180deg, ${lineColor}, #00a0e9)`,
+                    opacity: 0.95,
+                  }}
+                />
+              )}
+            </div>
+            <div style={{ flex: 1, paddingBottom: last ? 4 : 18, minWidth: 0 }}>
+              <div style={{ color: lineColor, fontWeight: 900, fontSize: 14, letterSpacing: 0.3 }}>{it.time}</div>
+              <div style={{ color: 'white', fontWeight: 800, fontSize: 15, marginTop: 2 }}>{it.name}</div>
+              <div style={{ color: C.textSec, fontSize: 12, marginTop: 4 }}>
+                {it.activity_type} · {it.duration_minutes} min
+              </div>
+              <div style={{ color: C.textMut, fontSize: 11, marginTop: 6, lineHeight: 1.45 }}>
+                {hours ? (
+                  <>
+                    <span style={{ color: C.biolume, fontWeight: 700 }}>Hours: </span>
+                    {hours}
+                  </>
+                ) : (
+                  <>Opening hours: check with venue (not in plan data)</>
+                )}
+              </div>
+              {it.why_included && (
+                <div
+                  style={{
+                    color: C.textSec,
+                    fontSize: 11,
+                    marginTop: 8,
+                    lineHeight: 1.45,
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    background: 'rgba(0,160,233,0.08)',
+                    border: `1px solid ${C.glassBd}`,
+                  }}
+                >
+                  {it.why_included}
+                </div>
+              )}
+            </div>
           </div>
-        ))}
-        <div style={{position:'absolute',top:'50%',left:'25%',right:'30%',height:2,
-          background:`linear-gradient(90deg,${C.biolume},transparent)`,opacity:0.5}}/>
+        );
+      })}
+    </div>
+  );
+}
+
+function TripDetail({ trip, onBack }) {
+  const plan = buildSyntheticTripPlan(trip);
+  const days = plan.days || [];
+  const candidates = trip.candidatePlaces || [];
+  const lineColor = trip.color || C.biolume;
+  const tabIds = ['overview', ...days.map((d) => `day-${d.day}`)];
+  const [tab, setTab] = useState('overview');
+  const [expandedDays, setExpandedDays] = useState(() => {
+    const s = new Set();
+    days.forEach((d) => s.add(d.day));
+    return s;
+  });
+  const toggleDayExpand = (dayNum) => {
+    setExpandedDays((prev) => {
+      const n = new Set(prev);
+      if (n.has(dayNum)) n.delete(dayNum);
+      else n.add(dayNum);
+      return n;
+    });
+  };
+  const summaryText = plan.summary || trip.aiSummary || '';
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: `linear-gradient(180deg,${C.navy},${C.deep})` }}>
+      <div style={{ padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <button
+          type="button"
+          data-testid="trip-detail-back"
+          onClick={onBack}
+          style={{
+            background: C.glass,
+            border: `1px solid ${C.glassBd}`,
+            borderRadius: 99,
+            padding: '8px 14px',
+            color: 'white',
+            fontWeight: 700,
+            fontSize: 14,
+            cursor: 'pointer',
+          }}
+        >
+          ← Back
+        </button>
+        <button
+          type="button"
+          style={{
+            background: `linear-gradient(135deg,${C.biolume},#00a0e9)`,
+            border: 'none',
+            borderRadius: 99,
+            padding: '8px 16px',
+            color: C.deep,
+            fontWeight: 800,
+            fontSize: 13,
+            cursor: 'pointer',
+          }}
+        >
+          💾 Save Trip
+        </button>
       </div>
-      {/* Info */}
-      <div style={{margin:'16px 20px 0',padding:'16px',borderRadius:18,background:C.glass,border:`1px solid ${C.glassBd}`}}>
-        <div style={{display:'flex',gap:14,marginBottom:12}}>
-          <div style={{width:60,height:60,borderRadius:14,
-            background:`linear-gradient(135deg,${trip.color}44,${trip.color}22)`,
-            display:'flex',alignItems:'center',justifyContent:'center',fontSize:28}}>🌊</div>
-          <div>
-            <div style={{color:'white',fontWeight:900,fontSize:17}}>{trip.title}</div>
-            <div style={{color:C.textSec,fontSize:13,marginTop:3}}>{trip.days} days · {trip.spots} dive spots</div>
-            <div style={{display:'flex',alignItems:'center',gap:6,marginTop:6}}>
-              <OllieOctopus size={22} hat={false}/>
-              <span style={{color:C.biolume,fontSize:12,fontWeight:700}}>DeepDive Team</span>
+      <div
+        style={{
+          margin: '0 20px',
+          height: 140,
+          borderRadius: 18,
+          overflow: 'hidden',
+          position: 'relative',
+          background: `linear-gradient(135deg,${C.ocean},${C.mid})`,
+          border: `1px solid ${C.glassBd}`,
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ color: C.biolume, opacity: 0.25, fontSize: 72 }}>🗺️</div>
+        </div>
+        <svg viewBox="0 0 320 120" preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+          <path d="M 40 75 Q 100 35, 160 60 T 300 50" fill="none" stroke={lineColor} strokeWidth="3" strokeLinecap="round" opacity="0.85" />
+        </svg>
+        {(days[0]?.items || []).slice(0, 6).map((it, i) => {
+          const x = 12 + i * 14;
+          const y = 55 + (i % 3) * 8;
+          return (
+            <div
+              key={`m-${i}`}
+              style={{
+                position: 'absolute',
+                left: `${x}%`,
+                top: `${y}%`,
+                transform: 'translate(-50%, -50%)',
+                fontSize: 20,
+                filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.4))',
+              }}
+            >
+              {activityTypeIcon(it.activity_type)}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ margin: '14px 20px 0', padding: '14px', borderRadius: 18, background: C.glass, border: `1px solid ${C.glassBd}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              borderRadius: 14,
+              background: `linear-gradient(135deg,${trip.color}44,${trip.color}22)`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 28,
+            }}
+          >
+            🌊
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: 'white', fontWeight: 900, fontSize: 17 }}>{trip.title}</div>
+            <div style={{ color: C.textSec, fontSize: 13, marginTop: 3 }}>
+              {trip.days} days · {trip.spots} stops
             </div>
           </div>
         </div>
-        <div style={{display:'flex',gap:8}}>
-          {['overview','unplanned','day 1'].map(t=>(
-            <button key={t} onClick={()=>setTab(t)} style={{
-              padding:'8px 14px',borderRadius:99,fontSize:13,fontWeight:700,cursor:'pointer',transition:'all 0.2s',
-              background:tab===t?'white':C.glass,color:tab===t?C.deep:'white',
-              border:`1px solid ${tab===t?'white':C.glassBd}`,
-            }}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>
-          ))}
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4, marginBottom: 2 }}>
+          {tabIds.map((tid) => {
+            const label = tid === 'overview' ? 'Overview' : `Day ${tid.replace('day-', '')}`;
+            const active = tab === tid;
+            return (
+              <button
+                key={tid}
+                type="button"
+                data-testid={tid === 'overview' ? 'trip-tab-overview' : `trip-tab-${tid}`}
+                onClick={() => setTab(tid)}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 99,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  whiteSpace: 'nowrap',
+                  background: active ? 'white' : C.glass,
+                  color: active ? C.deep : 'white',
+                  border: `1px solid ${active ? 'white' : C.glassBd}`,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
       </div>
-      {tab==='overview' && (
-        <div style={{margin:'12px 20px',padding:'16px',borderRadius:16,background:C.glass,border:`1px solid ${C.glassBd}`}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
-            <div style={{background:C.biolume,color:C.deep,borderRadius:99,padding:'4px 12px',fontSize:12,fontWeight:800}}>Day 1</div>
-            <span style={{color:C.textSec,fontSize:12}}>{trip.loc} · {trip.spots} spots</span>
-          </div>
-          <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:4}}>
-            {Array.from({length:5}).map((_,i)=>(
-              <div key={i} style={{width:52,height:52,borderRadius:10,
-                background:`linear-gradient(135deg,${C.mid},${C.ocean})`,
-                flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>
-                {['🐠','🦈','🐙','🦑','🐡'][i]}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 20px 24px', minHeight: 0 }}>
+        {tab === 'overview' && (
+          <div>
+            {summaryText ? (
+              <div
+                style={{
+                  color: C.textSec,
+                  fontSize: 13,
+                  lineHeight: 1.55,
+                  marginBottom: 16,
+                  padding: '14px',
+                  borderRadius: 14,
+                  background: 'rgba(0,229,212,0.06)',
+                  border: `1px solid ${C.glassBd}`,
+                }}
+              >
+                <div style={{ color: C.biolume, fontSize: 11, fontWeight: 800, marginBottom: 8, letterSpacing: 0.5 }}>SUMMARY</div>
+                {summaryText}
               </div>
-            ))}
-            <div style={{width:52,height:52,borderRadius:10,background:C.glass,border:`1px solid ${C.glassBd}`,
-              flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
-              color:C.textSec,fontWeight:700,fontSize:13}}>+{trip.spots-5}</div>
+            ) : null}
+            <div style={{ color: C.biolume, fontSize: 11, fontWeight: 800, letterSpacing: 0.5, marginBottom: 10 }}>ITINERARY BY DAY</div>
+            {days.length === 0 ? (
+              <div style={{ color: C.textSec, fontSize: 13 }}>No day-by-day plan yet. Generate a trip from the planner to see times and stops.</div>
+            ) : (
+              days.map((d) => {
+                const open = expandedDays.has(d.day);
+                const n = (d.items || []).length;
+                return (
+                  <div
+                    key={d.day}
+                    style={{ marginBottom: 12, borderRadius: 16, border: `1px solid ${C.glassBd}`, background: C.glass, overflow: 'hidden' }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleDayExpand(d.day)}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '14px 16px',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <div>
+                        <div style={{ color: 'white', fontWeight: 900, fontSize: 15 }}>Day {d.day}</div>
+                        <div style={{ color: C.textSec, fontSize: 12, marginTop: 2 }}>
+                          {d.theme} · {d.area} · {n} {n === 1 ? 'place' : 'places'}
+                        </div>
+                      </div>
+                      <div style={{ color: C.biolume, fontWeight: 800, fontSize: 18 }}>{open ? '▼' : '▶'}</div>
+                    </button>
+                    {open && (
+                      <div style={{ padding: '4px 16px 16px', borderTop: `1px solid ${C.glassBd}` }}>
+                        <TripDayTimeline day={d} candidatePlaces={candidates} lineColor={lineColor} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
           </div>
-        </div>
-      )}
-      <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-        <MascotBubble mascot="finn" message={`Ready to explore ${trip.loc}? Let's dive in! 🦈`}/>
+        )}
+        {days.map((d) =>
+          tab === `day-${d.day}` ? (
+            <div key={d.day}>
+              <div style={{ color: C.textSec, fontSize: 12, marginBottom: 12, paddingBottom: 10, borderBottom: `1px solid ${C.glassBd}` }}>
+                <span style={{ color: 'white', fontWeight: 800 }}>Day {d.day}</span>
+                {' · '}
+                {d.theme}
+                {' · '}
+                {d.area}
+              </div>
+              <TripDayTimeline day={d} candidatePlaces={candidates} lineColor={lineColor} />
+              {(d.backup_options || []).length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ color: C.textMut, fontSize: 11, fontWeight: 700, marginBottom: 6 }}>Backup options</div>
+                  {(d.backup_options || []).map((b, i) => (
+                    <div key={i} style={{ color: C.textSec, fontSize: 12, marginBottom: 4 }}>
+                      · {b}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null,
+        )}
       </div>
     </div>
   );
 }
 
 /* ─── ADD SPOTS SHEET ─── */
-function AddSpotsSheet({onClose}) {
+function AddSpotsSheet({
+  onClose,
+  userLists = [],
+  onAddPlaceToMap = () => {},
+  onAddPlaceToList = () => {},
+}) {
+  const extractFileInputRef = useRef(null);
+  const [view, setView] = useState('grid');
+  const [extractText, setExtractText] = useState('');
+  /** @type {null | { preview: string, base64: string, mime: string, name: string }} */
+  const [extractImage, setExtractImage] = useState(null);
+  const [extractLoading, setExtractLoading] = useState(false);
+  const [extractErr, setExtractErr] = useState('');
+  const [extractJson, setExtractJson] = useState(null);
+  const [listPickByIdx, setListPickByIdx] = useState({});
+  const [addedPlaces, setAddedPlaces] = useState({});
+  /** How user opened analyze: notes = list paste only (no social URL blurb). */
+  const [extractEntry, setExtractEntry] = useState('links');
+  const [tiktokSearchQuery, setTiktokSearchQuery] = useState('');
+  const resetExtractPanel = () => {
+    setExtractErr('');
+    setExtractJson(null);
+    setExtractText('');
+    setExtractImage(null);
+    setListPickByIdx({});
+    setAddedPlaces({});
+    setExtractEntry('links');
+  };
+  const openExtract = (entry = 'links') => {
+    resetExtractPanel();
+    setExtractEntry(entry);
+    setView('extract');
+  };
+  const openExtractFromScreenshots = () => {
+    resetExtractPanel();
+    setExtractEntry('screenshots');
+    setView('extract');
+    extractFileInputRef.current && extractFileInputRef.current.click();
+  };
+  const openSocialTiktokSearch = () => {
+    setTiktokSearchQuery('');
+    setView('socialTiktok');
+  };
+  const openTikTokSearchInBrowser = (override) => {
+    const query =
+      override != null && String(override).trim() !== ''
+        ? String(override).trim()
+        : tiktokSearchQuery.trim();
+    const term = query || 'travel';
+    window.open(`https://www.tiktok.com/search?q=${encodeURIComponent(term)}`, '_blank', 'noopener,noreferrer');
+  };
+  const goFromSocialToPasteLink = () => {
+    resetExtractPanel();
+    setExtractEntry('links');
+    setView('extract');
+  };
+  const onExtractImageChosen = (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    const mimeOk = /^image\/(png|jpeg|webp)$/i.test(f.type);
+    const extOk = /\.(png|jpe?g|webp)$/i.test(f.name);
+    if (!mimeOk && !extOk) {
+      setExtractErr('Choose a PNG, JPEG, or WebP file from Files (not a text or other document).');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== 'string') return;
+      const comma = dataUrl.indexOf(',');
+      const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+      const mime = (f.type && f.type.startsWith('image/')) ? f.type : 'image/png';
+      setExtractImage({ preview: dataUrl, base64, mime, name: f.name });
+      setExtractErr('');
+    };
+    reader.onerror = () => setExtractErr('Could not read that file. Try another image.');
+    reader.readAsDataURL(f);
+  };
+  const runExtract = async () => {
+    const pasted = extractText.trim();
+    if (!extractImage && !pasted) {
+      setExtractErr('Paste a link or notes, or choose a PNG / JPEG / WebP image.');
+      return;
+    }
+    const linkForJob = firstUrlInText(pasted) || '';
+    if (!extractImage && linkForJob && useReelJobPipelineForUrl(linkForJob)) {
+      setExtractLoading(true);
+      setExtractErr('');
+      try {
+        const { job_id: jid } = await apiFetchJson('/api/jobs', {
+          method: 'POST',
+          body: JSON.stringify({ url: pasted }),
+        });
+        const job = await pollReelExtractionJob(jid);
+        setExtractJson(job.result.extract);
+        setListPickByIdx({});
+        setAddedPlaces({});
+      } catch (e) {
+        setExtractErr(e?.message || String(e));
+      } finally {
+        setExtractLoading(false);
+      }
+      return;
+    }
+    setExtractLoading(true);
+    setExtractErr('');
+    try {
+      let body;
+      if (extractImage) {
+        body = {
+          posts: [
+            {
+              post_id: 'addspots-' + Date.now(),
+              url: 'https://deepdive.app/image-upload',
+              platform: 'other',
+              caption: '',
+              transcript: '',
+              ocr_text: '',
+              thumbnail_text: '',
+              raw_text: pasted,
+              image_base64: extractImage.base64,
+              image_mime_type: extractImage.mime,
+            },
+          ],
+        };
+      } else {
+        const link = firstUrlInText(pasted) || 'https://deepdive.app/import';
+        const platform = inferSocialPlatformFromUrl(link);
+        body = {
+          posts: [
+            {
+              post_id: 'addspots-' + Date.now(),
+              url: link,
+              platform,
+              caption: '',
+              transcript: '',
+              ocr_text: '',
+              thumbnail_text: '',
+              raw_text: pasted || 'scuba diving travel inspiration',
+            },
+          ],
+        };
+      }
+      const data = await apiFetchJson('/extract', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      setExtractJson(data);
+      setListPickByIdx({});
+      setAddedPlaces({});
+    } catch (e) {
+      setExtractErr(e?.message || String(e));
+    } finally {
+      setExtractLoading(false);
+    }
+  };
+
+  const extractPlacesInfo = extractJson ? pickPlacesFromExtract(extractJson) : { places: [], destinationHint: '' };
+  const getListPick = (idx) => listPickByIdx[idx] || userLists[0]?.id || '';
+
   const cardBase = {
     padding:'18px',borderRadius:18,textAlign:'left',cursor:'pointer',
     background:C.glass,border:`1px solid ${C.glassBd}`,transition:'all 0.25s',
@@ -746,17 +2215,261 @@ function AddSpotsSheet({onClose}) {
   };
   const titleStyle = {color:'white',fontWeight:800,fontSize:15,marginBottom:4};
   const subStyle = {color:C.textSec,fontSize:12,lineHeight:1.4};
+
   return (
+    <>
+      <input
+        ref={extractFileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+        data-testid="addspots-extract-file"
+        style={{display:'none'}}
+        onChange={onExtractImageChosen}
+      />
+      {view === 'extract' ? (
+      <div style={{padding:'24px 20px',background:`linear-gradient(180deg,${C.navy},${C.deep})`,height:'100%',
+        display:'flex',flexDirection:'column',overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <button type="button" data-testid="addspots-extract-back" onClick={()=>{ resetExtractPanel(); setView('grid'); }}
+            style={{color:C.biolume,fontSize:14,fontWeight:800,background:'none',border:'none',cursor:'pointer'}}>
+            ← Back
+          </button>
+          <button type="button" data-testid="addspots-close" onClick={onClose}
+            style={{width:32,height:32,borderRadius:'50%',background:C.glass,
+              border:`1px solid ${C.glassBd}`,color:C.textSec,fontSize:18,cursor:'pointer',
+              display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+        </div>
+        <h3 style={{color:'white',fontSize:18,fontWeight:900,marginBottom:8}}>
+          {extractEntry === 'notes' ? 'Paste your list' : 'Analyze text or image'}
+        </h3>
+        {extractEntry === 'notes' ? (
+          <p style={{color:C.textSec,fontSize:13,marginBottom:12,lineHeight:1.5}}>
+            Paste your list, bullets, or any notes about places you want to save. The AI reads plain text here—no TikTok or Instagram link required. When you’re done, use <strong style={{color:'white'}}>Run AI extract</strong> to pull out spots for your lists and map.
+          </p>
+        ) : extractEntry === 'screenshots' ? (
+          <p style={{color:C.textSec,fontSize:13,marginBottom:12,lineHeight:1.5}}>
+            Use <strong style={{color:'white'}}>Choose image</strong> to pick a <strong style={{color:'white'}}>PNG, JPEG, or WebP</strong> from Files, or add optional notes below. Images are sent to Gemini vision for place cues.
+          </p>
+        ) : (
+          <p style={{color:C.textSec,fontSize:13,marginBottom:12,lineHeight:1.5}}>
+            Paste a TikTok or Instagram reel URL, or a Google Maps link — the server runs the{' '}
+            <strong style={{color:'white'}}>reel-to-map</strong> job (download + Gemini video + Places when configured), which can take up to a couple of minutes. Or use{' '}
+            <strong style={{color:'white'}}>Choose image</strong> for a <strong style={{color:'white'}}>PNG, JPEG, or WebP</strong> for instant vision extract. Plain notes without a social/Maps URL still use the fast <code style={{color:C.biolume,fontSize:11}}>/extract</code> path.
+          </p>
+        )}
+        <div style={{display:'flex',flexWrap:'wrap',gap:10,marginBottom:12}}>
+          <button
+            type="button"
+            data-testid="addspots-extract-choose-image"
+            onClick={() => extractFileInputRef.current && extractFileInputRef.current.click()}
+            style={{
+              padding:'10px 14px',borderRadius:12,fontWeight:800,fontSize:13,
+              background:'rgba(96,165,250,0.2)',border:'1px solid rgba(96,165,250,0.5)',color:'#bfdbfe',
+              cursor:'pointer',
+            }}
+          >Choose image (PNG / JPEG / WebP)</button>
+          {extractImage ? (
+            <button type="button" onClick={()=>setExtractImage(null)}
+              style={{padding:'10px 14px',borderRadius:12,fontWeight:700,fontSize:12,background:C.glass,
+                border:`1px solid ${C.glassBd}`,color:C.textSec,cursor:'pointer'}}>Remove image</button>
+          ) : null}
+        </div>
+        {extractImage ? (
+          <div style={{marginBottom:12,padding:12,borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
+            <div style={{fontSize:11,color:C.biolume,fontWeight:800,marginBottom:8}}>Image preview</div>
+            <img src={extractImage.preview} alt="" style={{maxWidth:'100%',maxHeight:180,borderRadius:10,objectFit:'contain'}} />
+            <div style={{fontSize:10,color:C.textMut,marginTop:6}}>{extractImage.name}</div>
+          </div>
+        ) : null}
+        <textarea data-testid="addspots-extract-input" value={extractText} onChange={(e)=>setExtractText(e.target.value)}
+          placeholder={extractEntry === 'notes' ? 'e.g. • Manta Point\n• Crystal Bay\n• Cafés in Canggu…' : 'e.g. Best reefs in Raja Ampat for macro…'}
+          style={{width:'100%',minHeight:120,padding:14,borderRadius:14,background:'rgba(255,255,255,0.07)',
+            border:`1px solid ${C.glassBd}`,color:'white',fontSize:14,resize:'vertical',boxSizing:'border-box',fontFamily:'inherit'}}/>
+        <button type="button" data-testid="addspots-extract-submit" disabled={extractLoading} onClick={runExtract}
+          style={{marginTop:14,width:'100%',padding:14,borderRadius:14,fontWeight:800,
+            background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,border:'none',
+            cursor:extractLoading?'wait':'pointer',opacity:extractLoading?0.7:1}}>
+          {extractLoading ? 'Analyzing…' : 'Run AI extract'}
+        </button>
+        {extractErr && (
+          <div data-testid="addspots-extract-error" style={{marginTop:12,padding:12,borderRadius:12,
+            background:'rgba(255,110,122,0.12)',color:'#ffb3bc',fontSize:12}}>{extractErr}</div>
+        )}
+        {extractJson && (
+          <div data-testid="addspots-extract-result" style={{marginTop:14}}>
+            <ExtractInsightsSummary row={extractJson?.results?.[0]} />
+            {extractPlacesInfo.places.length === 0 ? (
+              <div style={{padding:12,borderRadius:12,background:C.glass,color:C.textSec,fontSize:13}}>
+                No places were detected. Try pasting a caption with venue names, or check the raw response below.
+              </div>
+            ) : (
+              <>
+                <div style={{color:C.biolume,fontSize:12,fontWeight:800,marginBottom:10,letterSpacing:0.5}}>
+                  Places we found {extractPlacesInfo.destinationHint ? `· near ${extractPlacesInfo.destinationHint}` : ''}
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:10,maxHeight:280,overflowY:'auto'}}>
+                  {extractPlacesInfo.places.map((place, idx) => {
+                    const key = `${idx}-${place.name}`;
+                    const st = addedPlaces[key];
+                    return (
+                      <div key={key} style={{padding:12,borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
+                        <div style={{color:'white',fontWeight:800,fontSize:14,marginBottom:4}}>{place.name}</div>
+                        <div style={{color:C.textSec,fontSize:11,marginBottom:10}}>
+                          {place.type}
+                          {place.confidence != null ? ` · ${Math.round((place.confidence || 0) * 100)}% match` : ''}
+                        </div>
+                        <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>
+                          <button
+                            type="button"
+                            data-testid={idx === 0 ? 'addspots-add-to-map' : undefined}
+                            disabled={!!st}
+                            onClick={() => {
+                              onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint });
+                              setAddedPlaces((a) => ({ ...a, [key]: 'map' }));
+                            }}
+                            style={{
+                              padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:st?'default':'pointer',
+                              border:`1px solid ${C.biolume}`,background:st==='map'?'rgba(0,229,212,0.25)':'rgba(0,229,212,0.12)',
+                              color:C.biolume,opacity:st&&st!=='map'?0.5:1,
+                            }}
+                          >{st === 'map' ? 'On map ✓' : 'Add to map'}</button>
+                          <select
+                            data-testid={idx === 0 ? 'addspots-list-select' : undefined}
+                            value={getListPick(idx)}
+                            onChange={(e) => setListPickByIdx((p) => ({ ...p, [idx]: e.target.value }))}
+                            style={{
+                              padding:'8px 10px',borderRadius:10,background:'rgba(255,255,255,0.08)',
+                              border:`1px solid ${C.glassBd}`,color:'white',fontSize:12,maxWidth:160,
+                            }}
+                          >
+                            {userLists.length === 0 ? (
+                              <option value="">Create a list first</option>
+                            ) : (
+                              userLists.map((l) => (
+                                <option key={l.id} value={l.id}>{l.name}</option>
+                              ))
+                            )}
+                          </select>
+                          <button
+                            type="button"
+                            data-testid={idx === 0 ? 'addspots-add-to-list' : undefined}
+                            disabled={!!st || !getListPick(idx) || userLists.length === 0}
+                            onClick={() => {
+                              const lid = getListPick(idx);
+                              if (!lid) return;
+                              onAddPlaceToList(
+                                { name: place.name, destinationHint: extractPlacesInfo.destinationHint },
+                                lid,
+                              );
+                              setAddedPlaces((a) => ({ ...a, [key]: 'list' }));
+                            }}
+                            style={{
+                              padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:st?'default':'pointer',
+                              border:`1px solid ${C.glassBd}`,background:st==='list'?'rgba(255,184,77,0.2)':C.glass,
+                              color:st==='list'?C.amber:'white',
+                            }}
+                          >{st === 'list' ? 'In list ✓' : 'Add to list'}</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+            <details style={{marginTop:12}}>
+              <summary style={{color:C.textMut,fontSize:11,cursor:'pointer'}}>Raw JSON</summary>
+              <pre style={{marginTop:8,padding:10,borderRadius:10,background:'rgba(0,0,0,0.25)',color:C.textMut,
+                fontSize:10,overflow:'auto',maxHeight:120,whiteSpace:'pre-wrap'}}>
+                {JSON.stringify(extractJson, null, 2)}
+              </pre>
+            </details>
+          </div>
+        )}
+      </div>
+      ) : view === 'socialTiktok' ? (
+      <div style={{padding:0,height:'100%',display:'flex',flexDirection:'column',background:'#0f0f0f',overflow:'hidden'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 16px',
+          background:'#121212',borderBottom:'1px solid rgba(255,255,255,0.08)',flexShrink:0}}>
+          <button type="button" data-testid="addspots-tiktok-back" onClick={()=>setView('grid')}
+            style={{color:'#fff',background:'none',border:'none',fontWeight:800,cursor:'pointer',fontSize:14}}>← Back</button>
+          <span style={{color:'#fff',fontWeight:900,fontSize:15,letterSpacing:0.3}}>TikTok</span>
+          <button type="button" data-testid="addspots-tiktok-close" onClick={onClose}
+            style={{color:'rgba(255,255,255,0.6)',background:'none',border:'none',fontSize:20,cursor:'pointer'}}>✕</button>
+        </div>
+        <div style={{flex:1,overflowY:'auto',padding:16}}>
+          <p style={{color:'rgba(255,255,255,0.55)',fontSize:12,marginBottom:14,lineHeight:1.5}}>
+            TikTok cannot be embedded inside this app. Use search below — it opens{' '}
+            <strong style={{color:'#fff'}}>tiktok.com</strong> in a new browser tab so you can browse videos, then paste a link back here.
+          </p>
+          <div style={{display:'flex',gap:8,marginBottom:12}}>
+            <input
+              data-testid="addspots-tiktok-query"
+              value={tiktokSearchQuery}
+              onChange={(e)=>setTiktokSearchQuery(e.target.value)}
+              onKeyDown={(e)=>{ if (e.key === 'Enter') { e.preventDefault(); openTikTokSearchInBrowser(); } }}
+              placeholder="Search videos, places, creators…"
+              style={{
+                flex:1,padding:'12px 14px',borderRadius:10,border:'1px solid rgba(255,255,255,0.12)',
+                background:'#252525',color:'#fff',fontSize:14,outline:'none',boxSizing:'border-box',fontFamily:'inherit',
+              }}
+            />
+            <button
+              type="button"
+              data-testid="addspots-tiktok-search-btn"
+              onClick={()=>openTikTokSearchInBrowser()}
+              style={{
+                padding:'12px 18px',borderRadius:10,border:'none',fontWeight:800,cursor:'pointer',flexShrink:0,
+                background:'linear-gradient(90deg,#25F4EE,#FE2C55)',color:'#0f0f0f',fontSize:13,
+              }}
+            >Search</button>
+          </div>
+          <div style={{color:'rgba(255,255,255,0.45)',fontSize:11,fontWeight:700,marginBottom:8,textTransform:'uppercase',letterSpacing:1}}>
+            Quick searches
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:20}}>
+            {['travel vlog','street food','scuba diving','sunset beach','tokyo day trip'].map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                data-testid={`addspots-tiktok-chip-${tag.replace(/\s+/g,'-')}`}
+                onClick={()=>openTikTokSearchInBrowser(tag)}
+                style={{
+                  padding:'8px 12px',borderRadius:99,border:'1px solid rgba(255,255,255,0.15)',background:'rgba(255,255,255,0.06)',
+                  color:'#e6e6e6',fontSize:12,cursor:'pointer',fontFamily:'inherit',
+                }}
+              >{tag}</button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={()=>window.open('https://www.tiktok.com/explore','_blank','noopener,noreferrer')}
+            style={{
+              width:'100%',padding:14,borderRadius:12,marginBottom:10,border:'1px solid rgba(37,244,238,0.35)',
+              background:'rgba(37,244,238,0.08)',color:'#25F4EE',fontWeight:800,fontSize:14,cursor:'pointer',fontFamily:'inherit',
+            }}
+          >Open TikTok Explore (new tab)</button>
+          <button
+            type="button"
+            data-testid="addspots-tiktok-paste-link"
+            onClick={goFromSocialToPasteLink}
+            style={{
+              width:'100%',padding:14,borderRadius:12,border:'none',
+              background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,fontWeight:900,fontSize:14,cursor:'pointer',fontFamily:'inherit',
+            }}
+          >I have a video link — paste for AI extract</button>
+        </div>
+      </div>
+      ) : (
     <div style={{padding:'24px 20px',background:`linear-gradient(180deg,${C.navy},${C.deep})`,height:'100%',display:'flex',flexDirection:'column',overflowY:'auto'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:22}}>
         <h3 style={{color:'white',fontSize:20,fontWeight:900,letterSpacing:-0.3}}>Add Spots</h3>
-        <button onClick={onClose} style={{width:32,height:32,borderRadius:'50%',background:C.glass,
+        <button type="button" data-testid="addspots-close" onClick={onClose} style={{width:32,height:32,borderRadius:'50%',background:C.glass,
           border:`1px solid ${C.glassBd}`,color:C.textSec,fontSize:18,cursor:'pointer',
           display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
       </div>
       <MascotBubble mascot="coral" message="I know all the best spots! Where did you find yours? 🐠" style={{marginBottom:18}}/>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
-        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+        <button type="button" data-testid="addspots-social" style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut} onClick={openSocialTiktokSearch}>
           <div style={{display:'flex',alignItems:'center',marginBottom:14,height:40}}>
             <div style={{width:40,height:40,borderRadius:10,background:'#000',display:'flex',alignItems:'center',
               justifyContent:'center',position:'relative',zIndex:2,boxShadow:`0 0 0 1px ${C.glassBd}`}}>
@@ -777,9 +2490,9 @@ function AddSpotsSheet({onClose}) {
             </div>
           </div>
           <div style={titleStyle}>Social Search</div>
-          <div style={subStyle}>Search TikTok &amp; Instagram in-app</div>
+          <div style={subStyle}>TikTok search &amp; paste a link</div>
         </button>
-        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+        <button type="button" data-testid="addspots-url" style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut} onClick={()=>openExtract('links')}>
           <div style={{width:40,height:40,borderRadius:10,background:'rgba(0,229,212,0.12)',
             border:`1px solid rgba(0,229,212,0.25)`,
             display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14}}>
@@ -791,7 +2504,7 @@ function AddSpotsSheet({onClose}) {
           <div style={titleStyle}>Paste any URL</div>
           <div style={subStyle}>Articles, blogs, TikTok, Instagram &amp; more</div>
         </button>
-        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+        <button type="button" data-testid="addspots-notes" style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut} onClick={()=>openExtract('notes')}>
           <div style={{width:40,height:40,borderRadius:10,background:'linear-gradient(135deg,#ffad4a,#ff8a3a)',
             display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14,
             boxShadow:'0 2px 12px rgba(255,138,58,0.35)'}}>
@@ -803,7 +2516,7 @@ function AddSpotsSheet({onClose}) {
           <div style={titleStyle}>Notes</div>
           <div style={subStyle}>Paste your list</div>
         </button>
-        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+        <button type="button" data-testid="addspots-screenshots" style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut} onClick={openExtractFromScreenshots}>
           <div style={{width:40,height:40,borderRadius:10,background:'linear-gradient(135deg,#60a5fa,#2aa3e0)',
             display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14,
             boxShadow:'0 2px 12px rgba(42,163,224,0.35)'}}>
@@ -840,6 +2553,8 @@ function AddSpotsSheet({onClose}) {
         </div>
       </button>
     </div>
+      )}
+    </>
   );
 }
 
@@ -886,7 +2601,7 @@ function ActionSheet({onClose, onAction}) {
     {id:'spots',icon:<CoralFish size={48}/>,label:'Add Spots',sub:'Save places you love'},
   ];
   return (
-    <div style={{position:'absolute',inset:0,background:'rgba(4,8,15,0.7)',backdropFilter:'blur(4px)',
+    <div data-testid="action-sheet-backdrop" style={{position:'absolute',inset:0,background:'rgba(4,8,15,0.7)',backdropFilter:'blur(4px)',
       display:'flex',flexDirection:'column',justifyContent:'flex-end',zIndex:50}}
       onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{
@@ -896,7 +2611,7 @@ function ActionSheet({onClose, onAction}) {
           <div style={{width:40,height:4,borderRadius:99,background:'rgba(255,255,255,0.2)'}}/>
         </div>
         {items.map(it=>(
-          <button key={it.id} onClick={()=>{onAction(it.id);onClose();}} style={{
+          <button key={it.id} type="button" data-testid={it.id==='trip'?'action-new-trip':it.id==='list'?'action-new-list':'action-add-spots'} onClick={()=>{onAction(it.id);onClose();}} style={{
             width:'100%',display:'flex',alignItems:'center',gap:16,padding:'14px 16px',borderRadius:16,
             background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10,cursor:'pointer',
             transition:'all 0.2s'}}
@@ -915,23 +2630,24 @@ function ActionSheet({onClose, onAction}) {
 }
 
 /* ─── SPOTS TAB ─── */
-function SpotsTab({onAddSpots}) {
+function SpotsTab({ onAddSpots, savedSpots, userLists }) {
   const [filter, setFilter] = useState('All');
   const [userLoc, setUserLoc] = useState(null);
   const [geoState, setGeoState] = useState('idle');
+  const [nearbyDiscover, setNearbyDiscover] = useState({ food: [], fun: [] });
+  const [nearbyDiscoverLoading, setNearbyDiscoverLoading] = useState(false);
+  const [nearbyDiscoverErr, setNearbyDiscoverErr] = useState(null);
 
-  const allSpots = [
-    {name:'Coral Gardens',loc:'Raja Ampat',emoji:'🐠',color:'#ff6e7a',list:'Favorites',lat:-0.7,lng:130.9},
-    {name:'Blue Hole',loc:'Belize',emoji:'🌀',color:'#00e5d4',list:'Bucket List',lat:17.3,lng:-87.5},
-    {name:'Manta Point',loc:'Komodo',emoji:'🦈',color:'#6fd8be',list:'Favorites',lat:-8.6,lng:119.5},
-    {name:'Cenote Dos Ojos',loc:'Mexico',emoji:'💧',color:'#a78bfa',list:'Bucket List',lat:20.3,lng:-87.4},
-    {name:'SS Thistlegorm',loc:'Egypt',emoji:'⚓',color:'#ffc277',list:'Wrecks',lat:27.8,lng:33.9},
-  ];
-  const lists = [
-    {name:'Favorites',icon:'⭐',count:2,color:'#ffc277'},
-    {name:'Bucket List',icon:'🌊',count:2,color:'#00e5d4'},
-    {name:'Wrecks',icon:'⚓',count:1,color:'#a78bfa'},
-  ];
+  const listLabel = (listId) => {
+    if (listId == null || listId === '') return 'On map';
+    const L = userLists.find((x) => x.id === listId);
+    return L ? L.name : 'List';
+  };
+  const allSpots = (savedSpots || []).map((s) => ({ ...s, list: listLabel(s.listId) }));
+  const lists = (userLists || []).map((l) => ({
+    ...l,
+    count: (savedSpots || []).filter((s) => s.listId === l.id).length,
+  }));
 
   const requestLoc = () => {
     if(!navigator.geolocation){setGeoState('denied');return;}
@@ -952,9 +2668,52 @@ function SpotsTab({onAddSpots}) {
 
   useEffect(()=>{ if(filter==='Nearby'&&geoState==='idle') requestLoc(); },[filter]);
 
-  const nearbySpots = userLoc ? [...allSpots]
-    .map(s=>({...s,km:Math.round(haversine(userLoc,{lat:s.lat,lng:s.lng}))}))
-    .sort((a,b)=>a.km-b.km) : [];
+  useEffect(() => {
+    if (filter !== 'Nearby' || geoState !== 'ready' || !userLoc) return;
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 40;
+    setNearbyDiscoverLoading(true);
+    setNearbyDiscoverErr(null);
+    const run = () => {
+      if (cancelled) return;
+      if (!window.google || !google.maps || !google.maps.places) {
+        attempts += 1;
+        if (attempts >= maxAttempts) {
+          setNearbyDiscoverErr('Places library not loaded');
+          setNearbyDiscover({ food: [], fun: [] });
+          setNearbyDiscoverLoading(false);
+          return;
+        }
+        setTimeout(run, 150);
+        return;
+      }
+      const profile = loadUserProfile();
+      fetchNearbyFoodAndFun(userLoc.lat, userLoc.lng, profile)
+        .then((data) => {
+          if (!cancelled) {
+            setNearbyDiscover(data);
+            setNearbyDiscoverLoading(false);
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) {
+            setNearbyDiscoverErr(e && e.message ? e.message : 'Could not load nearby places');
+            setNearbyDiscover({ food: [], fun: [] });
+            setNearbyDiscoverLoading(false);
+          }
+        });
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [filter, geoState, userLoc]);
+
+  const withCoords = allSpots.filter((s) => s.lat != null && s.lng != null && !Number.isNaN(s.lat) && !Number.isNaN(s.lng));
+  const nearbySpots = userLoc
+    ? [...withCoords]
+        .map((s) => ({ ...s, km: Math.round(haversine(userLoc, { lat: s.lat, lng: s.lng })) }))
+        .sort((a, b) => a.km - b.km)
+    : [];
 
   return (
     <div style={{padding:'20px',overflowY:'auto',height:'100%',boxSizing:'border-box'}}>
@@ -975,8 +2734,8 @@ function SpotsTab({onAddSpots}) {
       {filter==='Lists' ? (
         <>
           <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Your Lists</div>
-          {lists.map(l=>(
-            <div key={l.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+          {lists.map((l) => (
+            <div key={l.id || l.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
               background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10,cursor:'pointer'}}>
               <div style={{width:46,height:46,borderRadius:12,background:`${l.color}22`,
                 display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>{l.icon}</div>
@@ -1004,25 +2763,85 @@ function SpotsTab({onAddSpots}) {
           </div>
         ) : (
           <>
-            <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>📍 Sorted by distance from you</div>
-            {nearbySpots.map(s=>(
-              <div key={s.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
-                background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10}}>
-                <div style={{width:46,height:46,borderRadius:12,background:`${s.color}22`,
-                  display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>{s.emoji}</div>
-                <div style={{flex:1}}>
-                  <div style={{color:'white',fontWeight:800,fontSize:15}}>{s.name}</div>
-                  <div style={{color:C.textSec,fontSize:12,marginTop:2}}>📍 {s.loc}</div>
-                </div>
-                <div style={{color:C.biolume,fontSize:12,fontWeight:700}}>{s.km.toLocaleString()} km</div>
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,margin:'0 0 16px'}}>
+              {personalityNearbyHint(loadUserProfile().styles)}
+            </p>
+            {nearbyDiscoverLoading && (
+              <div style={{textAlign:'center',padding:'12px 0 20px',color:C.textSec,fontSize:13}}>
+                Finding food & entertainment near you…
               </div>
-            ))}
+            )}
+            {nearbyDiscoverErr && !nearbyDiscoverLoading && (
+              <div style={{padding:'12px 14px',borderRadius:12,background:'rgba(255,110,122,0.08)',border:`1px solid rgba(255,110,122,0.35)`,
+                color:C.textSec,fontSize:12,marginBottom:16,lineHeight:1.45}}>
+                {nearbyDiscoverErr.includes('Places') ? 'Turn on Places in Google Cloud for this API key, or check the Maps script loaded with the places library.' : nearbyDiscoverErr}
+              </div>
+            )}
+            {!nearbyDiscoverLoading && (nearbyDiscover.food.length > 0 || nearbyDiscover.fun.length > 0) && (
+              <>
+                {nearbyDiscover.food.length > 0 && (
+                  <>
+                    <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>🍽 Food & drink near you</div>
+                    {nearbyDiscover.food.map((p) => (
+                      <div key={p.id} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+                        background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10}}>
+                        <div style={{width:46,height:46,borderRadius:12,background:'rgba(0,229,212,0.12)',
+                          display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>🍽</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:'white',fontWeight:800,fontSize:15}}>{p.name}</div>
+                          <div style={{color:C.textSec,fontSize:12,marginTop:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                            {p.vicinity || 'Nearby'}{p.rating != null ? ` · ★ ${p.rating}` : ''}
+                          </div>
+                        </div>
+                        <div style={{color:C.biolume,fontSize:12,fontWeight:700,flexShrink:0}}>{p.km} km</div>
+                      </div>
+                    ))}
+                  </>
+                )}
+                {nearbyDiscover.fun.length > 0 && (
+                  <>
+                    <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,margin:'18px 0 10px'}}>🎭 Entertainment near you</div>
+                    {nearbyDiscover.fun.map((p) => (
+                      <div key={p.id} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+                        background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10}}>
+                        <div style={{width:46,height:46,borderRadius:12,background:'rgba(0,160,233,0.12)',
+                          display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>🎭</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:'white',fontWeight:800,fontSize:15}}>{p.name}</div>
+                          <div style={{color:C.textSec,fontSize:12,marginTop:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                            {p.vicinity || 'Nearby'}{p.rating != null ? ` · ★ ${p.rating}` : ''}
+                          </div>
+                        </div>
+                        <div style={{color:C.biolume,fontSize:12,fontWeight:700,flexShrink:0}}>{p.km} km</div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </>
+            )}
+            <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,margin:'8px 0 10px'}}>📍 Your saved spots (by distance)</div>
+            {nearbySpots.length === 0 ? (
+              <div style={{color:C.textSec,fontSize:13,padding:'8px 0 12px'}}>No saved spots with coordinates yet — add dives with a location to see them here.</div>
+            ) : (
+              nearbySpots.map((s) => (
+                <div key={s.id || s.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+                  background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10}}>
+                  <div style={{width:46,height:46,borderRadius:12,background:`${s.color}22`,
+                    display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>{s.emoji}</div>
+                  <div style={{flex:1}}>
+                    <div style={{color:'white',fontWeight:800,fontSize:15}}>{s.name}</div>
+                    <div style={{color:C.textSec,fontSize:12,marginTop:2}}>📍 {s.loc}</div>
+                  </div>
+                  <div style={{color:C.biolume,fontSize:12,fontWeight:700}}>{s.km.toLocaleString()} km</div>
+                </div>
+              ))
+            )}
           </>
         )
       ) : (
         <>
-          {allSpots.map(s=>(
-            <div key={s.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
+          {allSpots.map((s) => (
+            <div key={s.id || s.name} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 16px',borderRadius:16,
               background:C.glass,border:`1px solid ${C.glassBd}`,marginBottom:10}}>
               <div style={{width:46,height:46,borderRadius:12,background:`${s.color}22`,
                 display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>{s.emoji}</div>
@@ -1035,7 +2854,7 @@ function SpotsTab({onAddSpots}) {
           ))}
         </>
       )}
-      <button onClick={onAddSpots} style={{
+      <button type="button" data-testid="spots-add-dive" onClick={onAddSpots} style={{
         display:'flex',alignItems:'center',justifyContent:'center',gap:8,
         width:'100%',padding:'14px',borderRadius:14,fontSize:15,fontWeight:800,marginTop:8,
         background:`linear-gradient(135deg,rgba(0,229,212,0.15),rgba(0,160,233,0.1))`,
@@ -1061,8 +2880,8 @@ function TripsTab({trips, onPlan, onTripClick}) {
       ) : (
         <>
           <div style={{color:C.biolume,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:12}}>Your Expeditions</div>
-          {trips.map(t=>(
-            <div key={t.id} onClick={()=>onTripClick(t)} style={{
+          {trips.map((t,i)=>(
+            <div key={t.id} data-testid={i===0 ? 'trip-card' : undefined} onClick={()=>onTripClick(t)} style={{
               borderRadius:18,overflow:'hidden',marginBottom:12,cursor:'pointer',
               background:`linear-gradient(135deg,${t.color}22,${C.glass})`,
               border:`1px solid ${t.color}44`,padding:'16px',transition:'all 0.2s'}}
@@ -1080,7 +2899,7 @@ function TripsTab({trips, onPlan, onTripClick}) {
           ))}
         </>
       )}
-      <button onClick={onPlan} style={{
+      <button type="button" data-testid="plan-new-trip" onClick={onPlan} style={{
         display:'flex',alignItems:'center',justifyContent:'center',gap:10,
         width:'100%',padding:'15px',borderRadius:14,fontSize:15,fontWeight:800,
         background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
@@ -1109,20 +2928,317 @@ function TripsTab({trips, onPlan, onTripClick}) {
   );
 }
 
+function ProfileMenuMini({ onClose, onSignOut }) {
+  return (
+    <div role="menu" style={{
+      position:'absolute', top:44, right:0, zIndex:60, minWidth:168,
+      background:'rgba(6,14,28,0.98)', border:`1px solid ${C.glassBd}`, borderRadius:14, padding:8,
+      boxShadow:'0 12px 40px rgba(0,0,0,0.45)',
+    }}>
+      <button type="button" data-testid="profile-sign-out" onClick={() => { if (typeof onSignOut === 'function') onSignOut(); onClose(); }}
+        style={{
+          width:'100%', textAlign:'left', padding:'10px 12px', borderRadius:10, border:'none', background:'transparent',
+          color:'#ff6e7a', fontWeight:800, fontSize:14, cursor:'pointer', fontFamily:'inherit',
+        }}>Sign out</button>
+    </div>
+  );
+}
+
 /* ─── MAIN APP ─── */
-function MainApp() {
+function MainApp({ onSignOut }) {
   const [tab, setTab] = useState('trips');
   const [panel, setPanel] = useState(null);
   const [actionOpen, setActionOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [trips, setTrips] = useState(TRIPS);
+  const [planPrefill, setPlanPrefill] = useState('');
+  const [planSessionId, setPlanSessionId] = useState(0);
+  const [headerDest, setHeaderDest] = useState('');
+  const [headerPred, setHeaderPred] = useState([]);
+  const [headerDropdownOpen, setHeaderDropdownOpen] = useState(false);
+  const [headerYouMayLike, setHeaderYouMayLike] = useState([]);
+  const [headerYouMayLikeLoading, setHeaderYouMayLikeLoading] = useState(false);
+  const [headerAreaLabel, setHeaderAreaLabel] = useState('');
+  const [headerPlaceDetailId, setHeaderPlaceDetailId] = useState(null);
+  const [headerPlaceDetailData, setHeaderPlaceDetailData] = useState(null);
+  const [headerPlaceDetailLoading, setHeaderPlaceDetailLoading] = useState(false);
+
+  const [userLists, setUserLists] = useState(() => {
+    const raw = localStorage.getItem(LS_USER_LISTS);
+    if (raw == null || raw === '') return DEFAULT_USER_LISTS;
+    try {
+      const v = JSON.parse(raw);
+      return Array.isArray(v) ? v : DEFAULT_USER_LISTS;
+    } catch (_) {
+      return DEFAULT_USER_LISTS;
+    }
+  });
+  const [savedSpots, setSavedSpots] = useState(() => {
+    const raw = localStorage.getItem(LS_USER_SPOTS);
+    if (raw == null || raw === '') return DEMO_USER_SPOTS;
+    try {
+      const v = JSON.parse(raw);
+      return Array.isArray(v) ? v : DEMO_USER_SPOTS;
+    } catch (_) {
+      return DEMO_USER_SPOTS;
+    }
+  });
 
   const sharedMapRef = useRef(null);
   const tripMarkersRef = useRef([]);
+  const userPlaceMarkersRef = useRef([]);
+  const profileWrapRef = useRef(null);
+  const headerSearchRef = useRef(null);
+  const headerPlaceDetailRef = useRef(null);
+
+  useEffect(() => {
+    saveJson(LS_USER_LISTS, userLists);
+  }, [userLists]);
+  useEffect(() => {
+    saveJson(LS_USER_SPOTS, savedSpots);
+  }, [savedSpots]);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const fn = (e) => {
+      if (profileWrapRef.current && !profileWrapRef.current.contains(e.target)) setProfileOpen(false);
+    };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, [profileOpen]);
+
+  useEffect(() => {
+    const q = headerDest.trim();
+    if (q.length < 2) {
+      setHeaderPred([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      fetchDestinationPredictions(q).then(setHeaderPred);
+    }, 380);
+    return () => clearTimeout(t);
+  }, [headerDest]);
+
+  useEffect(() => {
+    if (!headerPlaceDetailId) {
+      setHeaderPlaceDetailData(null);
+      return;
+    }
+    let cancelled = false;
+    setHeaderPlaceDetailLoading(true);
+    fetchGooglePlaceDetails(headerPlaceDetailId)
+      .then((p) => {
+        if (!cancelled) {
+          setHeaderPlaceDetailData(p);
+          setHeaderPlaceDetailLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHeaderPlaceDetailData(null);
+          setHeaderPlaceDetailLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [headerPlaceDetailId]);
+
+  useEffect(() => {
+    const fn = (e) => {
+      if (headerPlaceDetailRef.current && headerPlaceDetailRef.current.contains(e.target)) return;
+      if (headerSearchRef.current && !headerSearchRef.current.contains(e.target)) {
+        setHeaderPred([]);
+        setHeaderDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, []);
+
+  const openPlan = () => {
+    setPlanPrefill('');
+    setPlanSessionId((s) => s + 1);
+    setPanel('plan');
+  };
+
+  const openPlanWithPrefill = (text) => {
+    setPlanPrefill(text || '');
+    setPlanSessionId((s) => s + 1);
+    setHeaderDest('');
+    setHeaderPred([]);
+    setHeaderDropdownOpen(false);
+    setHeaderYouMayLike([]);
+    setHeaderAreaLabel('');
+    setPanel('plan');
+  };
+
+  const loadHeaderAreaFromPlaceId = async (placeId, labelMain) => {
+    setHeaderYouMayLikeLoading(true);
+    setHeaderAreaLabel(labelMain || '');
+    let attempts = 0;
+    while (attempts < 35 && (!window.google || !google.maps?.places)) {
+      await new Promise((r) => setTimeout(r, 120));
+      attempts += 1;
+    }
+    const loc = await getLatLngFromPlaceId(placeId);
+    if (loc) {
+      const list = await fetchYouMayLikeNearLocation(loc.lat, loc.lng);
+      setHeaderYouMayLike(list);
+    } else {
+      setHeaderYouMayLike([]);
+    }
+    setHeaderYouMayLikeLoading(false);
+  };
+
+  const onHeaderPickPredictionExplore = (p) => {
+    setHeaderDest(p.description);
+    setHeaderPred([]);
+    setHeaderDropdownOpen(true);
+    loadHeaderAreaFromPlaceId(p.place_id, p.main_text);
+  };
+
+  const onBrowseCityChip = (city) => {
+    setHeaderDest(`${city.name}, ${city.country}`);
+    setHeaderPred([]);
+    setHeaderDropdownOpen(true);
+    setHeaderYouMayLikeLoading(true);
+    setHeaderAreaLabel(city.name);
+    let attempts = 0;
+    const run = () => {
+      if (attempts < 40 && (!window.google || !google.maps)) {
+        attempts += 1;
+        setTimeout(run, 120);
+        return;
+      }
+      if (!window.google || !google.maps) {
+        setHeaderYouMayLike([]);
+        setHeaderYouMayLikeLoading(false);
+        return;
+      }
+      const geo = new google.maps.Geocoder();
+      geo.geocode({ address: `${city.name}, ${city.country}` }, async (results, status) => {
+        if (status === 'OK' && results[0]) {
+          const loc = results[0].geometry.location;
+          const list = await fetchYouMayLikeNearLocation(loc.lat(), loc.lng());
+          setHeaderYouMayLike(list);
+        } else {
+          setHeaderYouMayLike([]);
+        }
+        setHeaderYouMayLikeLoading(false);
+      });
+    };
+    run();
+  };
 
   const clearTripMarkers = () => {
     tripMarkersRef.current.forEach(m => m.setMap(null));
     tripMarkersRef.current = [];
+  };
+
+  const clearUserPlaceMarkers = () => {
+    userPlaceMarkersRef.current.forEach((m) => m.setMap(null));
+    userPlaceMarkersRef.current = [];
+  };
+
+  const addPlaceToMap = (place) => {
+    if (!window.google || !google.maps) {
+      alert('Map is still loading — try again in a moment.');
+      return;
+    }
+    const map = sharedMapRef.current;
+    if (!map) return;
+    const geo = new google.maps.Geocoder();
+    const hint = place.destinationHint || '';
+    const q = hint ? `${place.name}, ${hint}` : place.name;
+    geo.geocode({ address: q }, (results, status) => {
+      if (status !== 'OK' || !results[0]) {
+        alert('Could not find that place on the map. Try a clearer name or add a region in your paste.');
+        return;
+      }
+      const loc = results[0].geometry.location;
+      clearTripMarkers();
+      const marker = new google.maps.Marker({
+        position: loc,
+        map,
+        title: place.name,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 14,
+          fillColor: '#ffb84d',
+          fillOpacity: 1,
+          strokeColor: 'white',
+          strokeWeight: 3,
+        },
+      });
+      userPlaceMarkersRef.current.push(marker);
+      map.panTo(loc);
+      map.setZoom(14);
+      const sid = `u-${Date.now()}`;
+      const addr = results[0].formatted_address || hint || place.name;
+      const shortLoc = typeof addr === 'string' ? addr.split(',').slice(-3).join(',').trim() : hint;
+      setSavedSpots((sp) => [
+        ...sp,
+        {
+          id: sid,
+          name: place.name,
+          loc: shortLoc || place.name,
+          emoji: '📍',
+          color: '#ffb84d',
+          listId: null,
+          lat: loc.lat(),
+          lng: loc.lng(),
+        },
+      ]);
+    });
+  };
+
+  const addPlaceToList = (place, listId) => {
+    const list = userLists.find((l) => l.id === listId);
+    if (!list) return;
+    const finish = (lat, lng, locLabel) => {
+      const sid = `u-${Date.now()}`;
+      setSavedSpots((sp) => [
+        ...sp,
+        {
+          id: sid,
+          name: place.name,
+          loc: locLabel || place.destinationHint || 'Saved',
+          emoji: '🍽️',
+          color: list.color,
+          listId,
+          lat,
+          lng,
+        },
+      ]);
+    };
+    if (!window.google || !google.maps) {
+      const [la, ln] = roughCenterForDestination(place.name);
+      finish(la, ln, place.destinationHint || '');
+      return;
+    }
+    const geo = new google.maps.Geocoder();
+    const hint = place.destinationHint || '';
+    const q = hint ? `${place.name}, ${hint}` : place.name;
+    geo.geocode({ address: q }, (results, status) => {
+      if (status === 'OK' && results[0]) {
+        const loc = results[0].geometry.location;
+        const addr = results[0].formatted_address || hint;
+        const shortLoc = typeof addr === 'string' ? addr.split(',').slice(-3).join(',').trim() : hint;
+        finish(loc.lat(), loc.lng(), shortLoc);
+      } else {
+        const [la, ln] = roughCenterForDestination(place.name);
+        finish(la, ln, hint || place.name);
+      }
+    });
+  };
+
+  const handleCreateList = (name) => {
+    const id = `list-${Date.now()}`;
+    setUserLists((ls) => [...ls, { id, name, icon: '📋', color: C.biolume }]);
+    setPanel(null);
+    setTab('spots');
   };
 
   const handleTripClick = (t) => {
@@ -1135,7 +3251,7 @@ function MainApp() {
     map.setZoom(t.zoom || 13);
     setTimeout(() => {
       if (!sharedMapRef.current) return;
-      t.pins.forEach(([lat, lng, name], i) => {
+      (t.pins || []).forEach(([lat, lng, name], i) => {
         const marker = new google.maps.Marker({
           position: { lat, lng },
           map: sharedMapRef.current,
@@ -1168,14 +3284,16 @@ function MainApp() {
   };
 
   const handleAction = (id) => {
-    if (id === 'trip') setPanel('plan');
+    if (id === 'trip') openPlan();
     if (id === 'list') setPanel('newlist');
     if (id === 'spots') setPanel('addspots');
   };
 
-  const handlePlanDone = () => {
-    setTrips(t => [...t, {id:Date.now(),title:'New Trip',loc:'Palawan, Philippines',days:4,spots:10,color:'#6fd8be'}]);
-    setPanel(null);
+  const handlePlanFromPanel = async (ctx) => {
+    const data = await planFromPostsRequest(ctx);
+    const trip = mapPlanFromPostsToTrip(data, ctx.dest);
+    setTrips((t) => [...t, trip]);
+    handleTripClick(trip);
   };
 
   const handleBack = () => {
@@ -1188,7 +3306,7 @@ function MainApp() {
   };
 
   return (
-    <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',position:'relative',overflow:'hidden'}}>
+    <div data-testid="main-app" style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',position:'relative',overflow:'hidden'}}>
       {/* TOP NAV */}
       <div style={{position:'relative',zIndex:10,display:'flex',alignItems:'center',justifyContent:'space-between',
         padding:'14px 20px',background:'rgba(4,8,20,0.6)',backdropFilter:'blur(16px)',
@@ -1200,12 +3318,133 @@ function MainApp() {
             <div style={{color:C.textMut,fontSize:11}}>Explore the depths</div>
           </div>
         </div>
-        <div style={{flex:1,maxWidth:320,margin:'0 20px',position:'relative'}}>
+        <div ref={headerSearchRef} style={{flex:1,maxWidth:400,margin:'0 20px',position:'relative',zIndex:40}}>
           <div style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',fontSize:16}}>🔍</div>
-          <input placeholder="Search ocean destinations..." style={{
-            width:'100%',padding:'10px 10px 10px 38px',borderRadius:12,
-            background:'rgba(255,255,255,0.07)',border:`1px solid ${C.glassBd}`,
-            color:'white',fontSize:14,outline:'none',boxSizing:'border-box'}}/>
+          <input
+            data-testid="header-destination-search"
+            value={headerDest}
+            onChange={(e) => setHeaderDest(e.target.value)}
+            onFocus={() => setHeaderDropdownOpen(true)}
+            placeholder="Search cities & countries — browse & explore…"
+            style={{
+              width:'100%',padding:'10px 10px 10px 38px',borderRadius:12,
+              background:'rgba(255,255,255,0.07)',border:`1px solid ${C.glassBd}`,
+              color:'white',fontSize:14,outline:'none',boxSizing:'border-box',
+            }}
+          />
+          {(headerDropdownOpen || headerPred.length > 0 || headerYouMayLikeLoading) && (
+            <div
+              role="dialog"
+              aria-label="Search and explore"
+              style={{
+                position:'absolute',left:0,right:0,top:'100%',marginTop:6,maxHeight:'min(420px, 55vh)',
+                overflowY:'auto',
+                background:'rgba(8,18,36,0.98)',border:`1px solid ${C.biolume}66`,borderRadius:12,
+                boxShadow:'0 16px 40px rgba(0,0,0,0.45)',zIndex:50,
+              }}
+            >
+              {headerPred.length > 0 && (
+                <div role="listbox" style={{borderBottom:`1px solid ${C.glassBd}`}}>
+                  {headerPred.map((p) => (
+                    <div
+                      key={p.place_id}
+                      role="option"
+                      style={{
+                        display:'flex',alignItems:'stretch',borderBottom:`1px solid ${C.glassBd}`,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onHeaderPickPredictionExplore(p)}
+                        style={{
+                          flex:1,textAlign:'left',padding:'10px 12px',cursor:'pointer',
+                          background:'transparent',border:'none',fontFamily:'inherit',minWidth:0,
+                        }}
+                      >
+                        <div style={{color:'white',fontWeight:700,fontSize:13}}>{p.main_text}</div>
+                        <div style={{color:C.textSec,fontSize:11,marginTop:2,lineHeight:1.35}}>{p.secondary_text}</div>
+                        <div style={{color:C.textMut,fontSize:10,marginTop:4}}>Explore top places nearby</div>
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="header-pred-plan"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => openPlanWithPrefill(p.description)}
+                        style={{
+                          flexShrink:0,padding:'8px 10px',alignSelf:'center',marginRight:8,
+                          borderRadius:10,background:`rgba(0,229,212,0.15)`,border:`1px solid ${C.biolume}`,
+                          color:C.biolume,fontWeight:800,fontSize:11,cursor:'pointer',fontFamily:'inherit',
+                        }}
+                      >
+                        Plan
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{padding:'10px 12px 6px'}}>
+                <div style={{color:C.textMut,fontSize:10,fontWeight:800,letterSpacing:0.6,marginBottom:8}}>
+                  BROWSE CITIES & COUNTRIES
+                </div>
+                <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:6}}>
+                  {ALL_DESTINATIONS.slice(0, 28).map((c) => (
+                    <button
+                      key={c.name + c.country}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => onBrowseCityChip(c)}
+                      style={{
+                        flexShrink:0,padding:'6px 10px',borderRadius:99,fontSize:11,fontWeight:700,
+                        cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',
+                        background:C.glass,border:`1px solid ${C.glassBd}`,color:'white',
+                      }}
+                    >
+                      {c.flag} {c.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {(headerYouMayLikeLoading || headerYouMayLike.length > 0 || headerAreaLabel) && (
+                <div style={{padding:'4px 12px 12px',borderTop:`1px solid ${C.glassBd}`}}>
+                  <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:8,marginBottom:8}}>
+                    <span style={{color:C.textMut,fontSize:10,fontWeight:800,letterSpacing:0.5}}>YOU MAY LIKE</span>
+                    {headerAreaLabel ? (
+                      <span style={{color:C.biolume,fontSize:11,fontWeight:700}}>near {headerAreaLabel}</span>
+                    ) : null}
+                  </div>
+                  {headerYouMayLikeLoading ? (
+                    <div style={{color:C.textSec,fontSize:12,padding:'8px 0'}}>Loading popular spots…</div>
+                  ) : (
+                    <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4}}>
+                      {headerYouMayLike.map((pl) => (
+                        <button
+                          key={pl.place_id}
+                          type="button"
+                          data-testid="header-you-may-like-card"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => setHeaderPlaceDetailId(pl.place_id)}
+                          style={{
+                            flexShrink:0,width:148,padding:'10px',borderRadius:12,textAlign:'left',
+                            cursor:'pointer',fontFamily:'inherit',
+                            background:`linear-gradient(145deg, rgba(0,160,233,0.12), ${C.glass})`,
+                            border:`1px solid ${C.glassBd}`,
+                          }}
+                        >
+                          <div style={{fontSize:22,marginBottom:4}}>{placeTypesEmoji(pl.types)}</div>
+                          <div style={{color:'white',fontWeight:800,fontSize:12,lineHeight:1.25,marginBottom:4}}>{pl.name}</div>
+                          <div style={{color:C.biolume,fontSize:11,fontWeight:800}}>
+                            {pl.rating != null ? `★ ${pl.rating.toFixed(1)}` : '★ —'}
+                            {pl.user_ratings_total != null ? ` (${pl.user_ratings_total})` : ''}
+                          </div>
+                          <div style={{color:C.textMut,fontSize:9,marginTop:4,lineHeight:1.3}}>Google · tap for details</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
           <div style={{position:'relative',cursor:'pointer'}}>
@@ -1214,10 +3453,159 @@ function MainApp() {
               background:'#ff6e7a',display:'flex',alignItems:'center',justifyContent:'center',
               fontSize:9,fontWeight:900,color:'white',boxShadow:'0 0 8px rgba(255,110,122,0.6)'}}>5</div>
           </div>
-          <div style={{width:36,height:36,borderRadius:'50%',background:C.glassBr,border:`1px solid ${C.glassBd}`,
-            display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,cursor:'pointer'}}>👤</div>
+          <div ref={profileWrapRef} style={{position:'relative'}}>
+            <button type="button" data-testid="profile-button" aria-expanded={profileOpen}
+              onClick={() => setProfileOpen((v) => !v)}
+              style={{width:36,height:36,borderRadius:'50%',background:C.glassBr,border:`1px solid ${C.glassBd}`,
+                display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,cursor:'pointer',padding:0}}>👤</button>
+            {profileOpen && (
+              <ProfileMenuMini onClose={() => setProfileOpen(false)} onSignOut={onSignOut} />
+            )}
+          </div>
         </div>
       </div>
+
+      {headerPlaceDetailId && (
+        <div
+          ref={headerPlaceDetailRef}
+          data-place-detail="true"
+          style={{
+            position:'fixed',inset:0,zIndex:200,
+            background:'rgba(4,8,20,0.72)',backdropFilter:'blur(8px)',
+            display:'flex',alignItems:'center',justifyContent:'center',padding:16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setHeaderPlaceDetailId(null);
+              setHeaderPlaceDetailData(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              width:'100%',maxWidth:400,maxHeight:'85vh',overflowY:'auto',
+              borderRadius:18,background:'rgba(8,18,36,0.98)',border:`1px solid ${C.biolume}55`,
+              boxShadow:'0 24px 60px rgba(0,0,0,0.5)',padding:20,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+              <div style={{color:C.biolume,fontSize:11,fontWeight:800,letterSpacing:0.5}}>PLACE DETAILS</div>
+              <button
+                type="button"
+                data-testid="header-place-detail-close"
+                onClick={() => { setHeaderPlaceDetailId(null); setHeaderPlaceDetailData(null); }}
+                style={{
+                  background:'transparent',border:'none',color:C.textSec,fontSize:20,cursor:'pointer',lineHeight:1,padding:4,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            {headerPlaceDetailLoading ? (
+              <div style={{color:C.textSec,fontSize:14,padding:'24px 0',textAlign:'center'}}>Loading…</div>
+            ) : headerPlaceDetailData ? (
+              (() => {
+                const pl = headerPlaceDetailData;
+                const types = pl.types || [];
+                const foodish = isFoodLikeTypes(types);
+                const addr = pl.formatted_address || '';
+                const yelp = yelpSearchUrl(pl.name, addr);
+                const priceTable = ['—', '$', '$$', '$$$', '$$$$'];
+                const price =
+                  pl.price_level != null
+                    ? priceTable[Math.min(4, Math.max(0, pl.price_level))]
+                    : '';
+                return (
+                  <div>
+                    <div style={{fontSize:36,marginBottom:8}}>{placeTypesEmoji(types)}</div>
+                    <div style={{color:'white',fontWeight:900,fontSize:18,lineHeight:1.25}}>{pl.name}</div>
+                    <div style={{color:C.biolume,fontSize:14,fontWeight:800,marginTop:8}}>
+                      Google {pl.rating != null ? `★ ${pl.rating.toFixed(1)}` : '—'}
+                      {pl.user_ratings_total != null ? ` · ${pl.user_ratings_total} reviews` : ''}
+                      {price ? ` · ${price}` : ''}
+                    </div>
+                    {foodish && (
+                      <div style={{marginTop:10}}>
+                        <a
+                          href={yelp}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            display:'inline-block',padding:'8px 12px',borderRadius:10,
+                            background:'#ff3a44',color:'white',fontWeight:800,fontSize:12,
+                            textDecoration:'none',
+                          }}
+                        >
+                          View on Yelp (ratings & photos)
+                        </a>
+                        <div style={{color:C.textMut,fontSize:10,marginTop:6,lineHeight:1.4}}>
+                          Yelp opens in a new tab (search). Google data shown above when available.
+                        </div>
+                      </div>
+                    )}
+                    <div style={{color:C.textSec,fontSize:12,marginTop:12,lineHeight:1.45}}>{addr}</div>
+                    {pl.formatted_phone_number ? (
+                      <div style={{color:C.textSec,fontSize:12,marginTop:6}}>📞 {pl.formatted_phone_number}</div>
+                    ) : null}
+                    {pl.opening_hours && pl.opening_hours.weekday_text && (
+                      <div style={{marginTop:12}}>
+                        <div style={{color:C.biolume,fontSize:11,fontWeight:800,marginBottom:6}}>Hours (Google)</div>
+                        {pl.opening_hours.weekday_text.map((line, i) => (
+                          <div key={i} style={{color:C.textSec,fontSize:11,marginBottom:2}}>{line}</div>
+                        ))}
+                      </div>
+                    )}
+                    {pl.reviews && pl.reviews.length > 0 && (
+                      <div style={{marginTop:14}}>
+                        <div style={{color:C.biolume,fontSize:11,fontWeight:800,marginBottom:8}}>Recent reviews (Google)</div>
+                        {pl.reviews.slice(0, 3).map((rv, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              marginBottom:10,padding:10,borderRadius:10,
+                              background:'rgba(255,255,255,0.04)',border:`1px solid ${C.glassBd}`,
+                            }}
+                          >
+                            <div style={{color:'white',fontSize:12,fontWeight:700}}>
+                              {rv.author_name} · ★ {rv.rating}
+                            </div>
+                            <div style={{color:C.textSec,fontSize:11,marginTop:4,lineHeight:1.45}}>
+                              {(rv.text || '').slice(0, 280)}
+                              {(rv.text || '').length > 280 ? '…' : ''}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {pl.website ? (
+                      <a
+                        href={pl.website}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{display:'inline-block',marginTop:12,color:C.biolume,fontSize:13,fontWeight:700}}
+                      >
+                        Official website →
+                      </a>
+                    ) : null}
+                    {pl.url ? (
+                      <div style={{marginTop:8}}>
+                        <a href={pl.url} target="_blank" rel="noopener noreferrer" style={{color:C.textMut,fontSize:11}}>
+                          Open in Google Maps
+                        </a>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()
+            ) : (
+              <div style={{color:'#ff6e7a',fontSize:13}}>Could not load details.</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* CONTENT AREA */}
       <div style={{position:'relative',zIndex:5,flex:1,display:'flex',overflow:'hidden'}}>
@@ -1242,7 +3630,7 @@ function MainApp() {
           {panel===null && <>
             <div style={{display:'flex',borderBottom:`1px solid ${C.glassBd}`}}>
               {['trips','spots'].map(t=>(
-                <button key={t} onClick={()=>setTab(t)} style={{
+                <button key={t} type="button" data-testid={t==='trips'?'tab-trips':'tab-spots'} onClick={()=>setTab(t)} style={{
                   flex:1,padding:'16px',fontWeight:800,fontSize:14,cursor:'pointer',
                   background:'none',border:'none',color:tab===t?'white':C.textSec,
                   borderBottom:`2px solid ${tab===t?C.biolume:'transparent'}`,
@@ -1251,19 +3639,41 @@ function MainApp() {
               ))}
             </div>
             <div style={{flex:1,overflow:'hidden'}}>
-              {tab==='trips' && <TripsTab trips={trips} onPlan={()=>setPanel('plan')} onTripClick={handleTripClick}/>}
-              {tab==='spots' && <SpotsTab onAddSpots={()=>setPanel('addspots')}/>}
+              {tab==='trips' && <TripsTab trips={trips} onPlan={openPlan} onTripClick={handleTripClick}/>}
+              {tab==='spots' && (
+                <SpotsTab
+                  onAddSpots={() => setPanel('addspots')}
+                  savedSpots={savedSpots}
+                  userLists={userLists}
+                />
+              )}
             </div>
           </>}
-          {panel==='plan' && <PlanTripPanel onClose={()=>setPanel(null)} onDone={handlePlanDone}/>}
+          {panel==='plan' && (
+            <PlanTripPanel
+              key={planSessionId}
+              initialDest={planPrefill}
+              onClose={() => { setPanel(null); setPlanPrefill(''); }}
+              onPlan={handlePlanFromPanel}
+            />
+          )}
           {panel==='detail' && selectedTrip && <TripDetail trip={selectedTrip} onBack={handleBack}/>}
-          {panel==='addspots' && <AddSpotsSheet onClose={()=>setPanel(null)}/>}
-          {panel==='newlist' && <NewListModal onClose={()=>setPanel(null)} onCreate={()=>setPanel(null)}/>}
+          {panel==='addspots' && (
+            <AddSpotsSheet
+              onClose={() => setPanel(null)}
+              userLists={userLists}
+              onAddPlaceToMap={addPlaceToMap}
+              onAddPlaceToList={addPlaceToList}
+            />
+          )}
+          {panel==='newlist' && (
+            <NewListModal onClose={() => setPanel(null)} onCreate={(name) => handleCreateList(name)} />
+          )}
         </div>
       </div>
 
       {/* FAB */}
-      <button onClick={()=>setActionOpen(v=>!v)} style={{
+      <button type="button" data-testid="fab-main" onClick={()=>setActionOpen(v=>!v)} style={{
         position:'absolute',bottom:24,right:24,zIndex:20,
         width:56,height:56,borderRadius:'50%',
         background:actionOpen?'#ff6e7a':`linear-gradient(135deg,${C.biolume},#00a0e9)`,
@@ -1281,7 +3691,7 @@ function MainApp() {
 }
 
 /* ─── SPLASH SCREEN ─── */
-function SplashScreen({onStart}) {
+function SplashScreen({onStart, onSignIn}) {
   return (
     <div style={{height:'100%',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
       background:'radial-gradient(ellipse at 50% 30%, #0d2a50 0%, #060e1c 50%, #04080f 100%)',
@@ -1303,13 +3713,13 @@ function SplashScreen({onStart}) {
         <div style={{color:C.textSec,fontSize:16,marginTop:10,fontWeight:600}}>Explore the ocean. Plan your adventure.</div>
       </div>
       <div style={{marginTop:32,display:'flex',flexDirection:'column',gap:12,width:'100%',maxWidth:320}}>
-        <button onClick={onStart} style={{
+        <button type="button" data-testid="splash-get-started" onClick={onStart} style={{
           padding:'18px',borderRadius:18,fontSize:18,fontWeight:900,cursor:'pointer',
           background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
           border:'none',boxShadow:'0 0 40px rgba(0,229,212,0.4)',letterSpacing:'-0.5px'}}>
           Get Started 🌊
         </button>
-        <button style={{
+        <button type="button" data-testid="splash-sign-in" onClick={onSignIn} style={{
           padding:'14px',borderRadius:18,fontSize:15,fontWeight:700,cursor:'pointer',
           background:'rgba(255,255,255,0.06)',color:C.textSec,
           border:`1px solid ${C.glassBd}`}}>
@@ -1398,11 +3808,20 @@ function App() {
 
   return (
     <div style={{width:'100vw',height:'100vh',overflow:'hidden',position:'relative'}}>
-      {screen==='splash' && <SplashScreen onStart={()=>goOnboard(1)}/>}
+      {screen==='splash' && <SplashScreen onStart={()=>goOnboard(1)} onSignIn={()=>goOnboard(1)}/>}
       {screen==='onboard' && onboardStep===1 && <OnboardAgeScreen onNext={()=>setOnboardStep(2)} onBack={()=>setScreen('splash')}/>}
       {screen==='onboard' && onboardStep===2 && <OnboardTripScreen onNext={()=>setOnboardStep(3)} onBack={()=>setOnboardStep(1)}/>}
       {screen==='onboard' && onboardStep===3 && <OnboardStyleScreen onNext={()=>setScreen('app')} onBack={()=>setOnboardStep(2)}/>}
-      {screen==='app' && <MainApp/>}
+      {screen==='app' && (
+        <MainApp
+          onSignOut={() => {
+            try {
+              localStorage.setItem('dd_screen', 'splash');
+            } catch (_) {}
+            setScreen('splash');
+          }}
+        />
+      )}
       {tweaksVisible && <TweaksPanel tweaks={tweaks} onChange={handleTweakChange} onClose={()=>setTweaksVisible(false)}/>}
     </div>
   );

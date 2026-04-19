@@ -16,6 +16,9 @@ class NormalizedPost(BaseModel):
     ocr_text: Optional[str] = ""
     thumbnail_text: Optional[str] = ""
     raw_text: str
+    # Optional screenshot / photo (Gemini vision). Raw base64 only; no data: URL prefix.
+    image_base64: Optional[str] = None
+    image_mime_type: Optional[str] = None
 
 
 class DestinationCandidate(BaseModel):

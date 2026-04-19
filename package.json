@@ -1,0 +1,19 @@
+{
+  "name": "fullyhacks2026",
+  "private": true,
+  "scripts": {
+    "dev": "serve -l 4321 .",
+    "build": "node scripts/gsd-static-build.mjs",
+    "gsd": "gsd-sdk",
+    "gsd:version": "gsd-sdk --version",
+    "test:api": "python3 -m pytest tests/test_api_routes.py -q",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:all": "npm run test:api && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@gsd-build/sdk": "^0.1.0",
+    "@playwright/test": "^1.49.0",
+    "serve": "^14.2.4"
+  }
+}
