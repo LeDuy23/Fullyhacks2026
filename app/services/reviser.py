@@ -1,6 +1,7 @@
 import json
+
 from app.models.schemas import ReviseTripRequest, TripPlan
-from app.services.ai_client import generate_json
+from app.services.llm import call_llm_validated
 
 
 REVISE_SYSTEM_PROMPT = """
@@ -53,5 +54,10 @@ Return JSON in exactly this shape:
 
 
 def revise_trip(request: ReviseTripRequest) -> TripPlan:
-    raw = generate_json(REVISE_SYSTEM_PROMPT, build_revise_trip_prompt(request))
-    return TripPlan(**raw)
+    prompt = f"""{REVISE_SYSTEM_PROMPT.strip()}
+
+Return ONLY valid JSON matching the requested shape. No explanation.
+
+{build_revise_trip_prompt(request).strip()}
+"""
+    return call_llm_validated(prompt, TripPlan)

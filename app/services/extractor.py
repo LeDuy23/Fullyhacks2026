@@ -1,7 +1,8 @@
 import json
 from typing import List
-from app.models.schemas import NormalizedPost, ExtractedPost
-from app.services.ai_client import generate_json
+
+from app.models.extraction import ExtractedPost, NormalizedPost
+from app.services.llm import call_llm_validated
 
 
 EXTRACT_SYSTEM_PROMPT = """
@@ -63,8 +64,13 @@ Return JSON in exactly this shape:
 
 
 def extract_post(post: NormalizedPost) -> ExtractedPost:
-    raw = generate_json(EXTRACT_SYSTEM_PROMPT, build_extract_prompt(post))
-    return ExtractedPost(**raw)
+    prompt = f"""{EXTRACT_SYSTEM_PROMPT.strip()}
+
+Return ONLY valid JSON matching the requested shape. No explanation.
+
+{build_extract_prompt(post).strip()}
+"""
+    return call_llm_validated(prompt, ExtractedPost)
 
 
 def extract_posts(posts: List[NormalizedPost]) -> List[ExtractedPost]:
