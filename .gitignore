@@ -8,6 +8,7 @@ __pycache__/
 config.js
 *.pem
 secrets
+llm-output.txt
 
 # Windows reserved name — never create; breaks `git add` if present
 nul
