@@ -11,6 +11,7 @@ __pycache__/
 config.js
 *.pem
 secrets
+test-results/
 
 # Windows reserved name — never create; breaks `git add` if present
 nul
