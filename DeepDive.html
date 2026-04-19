@@ -2656,6 +2656,8 @@ function AddSpotsSheet({
   const reviewLight = importUiTheme === 'light';
   const sourceReviewDark = importUiTheme === 'dark';
   const [listPickByIdx, setListPickByIdx] = useState({});
+  /** Target list for bulk toolbar (Add to List / Map + list). Kept in sync with `userLists`. */
+  const [bulkImportListId, setBulkImportListId] = useState('');
   const [addedPlaces, setAddedPlaces] = useState({});
   const [selectedPlaceKeys, setSelectedPlaceKeys] = useState({});
   const [newListName, setNewListName] = useState('');
@@ -2675,10 +2677,18 @@ function AddSpotsSheet({
     setNewListName('');
     setExtractEntry('links');
   };
-  /** After saving to map/list, clear extract UI so you can paste another link or run extract again. */
-  const clearExtractAfterSave = () => {
-    resetExtractPanel();
-  };
+  useEffect(() => {
+    if (!userLists || userLists.length === 0) {
+      setBulkImportListId('');
+      return;
+    }
+    setBulkImportListId((prev) => {
+      if (prev && userLists.some((l) => l && l.id === prev)) return prev;
+      const first = userLists.find((l) => l && l.id);
+      return first ? first.id : '';
+    });
+  }, [userLists]);
+
   const openExtract = (entry = 'links') => {
     resetExtractPanel();
     setExtractEntry(entry);
@@ -2809,7 +2819,8 @@ function AddSpotsSheet({
       });
       setExtractJson(data);
       setExtractMeta({ source: { url: firstUrlInText(pasted) || '', thumbnail_url: extractImage?.preview || null } });
-      setShowImportReview(false);
+      /* Same as reel job path: review-first UI hides the paste form so saves (map / list / map+list) do not jump back to “paste your link”. */
+      setShowImportReview(true);
       setListPickByIdx({});
       setAddedPlaces({});
       const p = pickPlacesFromExtract(data);
@@ -2838,15 +2849,18 @@ function AddSpotsSheet({
   const effectiveListIdForRow = (idx) => {
     const row = listPickByIdx[idx];
     if (row !== undefined && row !== '') return row;
-    return userLists[0]?.id || '';
+    return bulkImportListId || userLists.find((l) => l && l.id)?.id || '';
   };
-  const defaultImportListId = userLists[0]?.id || '';
   const sourceThumb =
     extractMeta?.source?.thumbnail_url ||
     (extractImage && extractImage.preview) ||
     null;
   const sourceUrl = extractMeta?.source?.url || '';
-  const selectedPlaces = extractPlacesInfo.places.filter((place, idx) => selectedPlaceKeys[`${idx}-${place.name}`]);
+  /** Selected rows with index so bulk list/map actions use each row’s list dropdown (falls back to bulk list). */
+  const selectedPlaceRows = extractPlacesInfo.places
+    .map((place, idx) => ({ place, idx }))
+    .filter(({ place, idx }) => selectedPlaceKeys[`${idx}-${place.name}`]);
+  const selectedPlaces = selectedPlaceRows.map((r) => r.place);
   const togglePlacePicked = (key) => setSelectedPlaceKeys((s) => ({ ...s, [key]: !s[key] }));
   const toggleAllPicked = () => {
     const keys = extractPlacesInfo.places.map((place, idx) => `${idx}-${place.name}`);
@@ -2879,24 +2893,25 @@ function AddSpotsSheet({
     selectedPlaces.forEach((place) => onAddPlaceToMap(placePayload(place)));
     bumpAddedForSelected('map');
   };
-  const saveSelectedToList = (listId, listMeta) => {
-    if (!listId) return;
-    if (selectedPlaces.length === 0) return;
-    selectedPlaces.forEach((place) =>
-      onAddPlaceToList(
-        placePayload(place),
-        listId,
-        listMeta,
-      ),
-    );
+  const saveSelectedToList = () => {
+    if (selectedPlaceRows.length === 0 || userLists.length === 0) return;
+    selectedPlaceRows.forEach(({ place, idx }) => {
+      const listId = effectiveListIdForRow(idx);
+      if (!listId) return;
+      const listMeta = userLists.find((l) => l && l.id === listId);
+      if (!listMeta) return;
+      onAddPlaceToList(placePayload(place), listId, listMeta);
+    });
     bumpAddedForSelected('list');
-    clearExtractAfterSave();
   };
-  /** Add every selected place to the map and the chosen list (two pins/list rows in parent). */
-  const saveSelectedMapAndList = (listId, listMeta) => {
-    if (!listId) return;
-    if (selectedPlaces.length === 0) return;
-    selectedPlaces.forEach((place) => {
+  /** Add every selected place to the map and that row’s chosen list (per-row dropdown, else bulk list). */
+  const saveSelectedMapAndList = () => {
+    if (selectedPlaceRows.length === 0 || userLists.length === 0) return;
+    selectedPlaceRows.forEach(({ place, idx }) => {
+      const listId = effectiveListIdForRow(idx);
+      if (!listId) return;
+      const listMeta = userLists.find((l) => l && l.id === listId);
+      if (!listMeta) return;
       const payload = placePayload(place);
       onAddPlaceToMap(payload);
       onAddPlaceToList(payload, listId, listMeta, { skipMapPing: true });
@@ -3333,8 +3348,15 @@ function AddSpotsSheet({
                               onAddPlaceToList(
                                 placePayload(place),
                                 lid,
+                                userLists.find((l) => l && l.id === lid),
                               );
-                              clearExtractAfterSave();
+                              setAddedPlaces((a) => {
+                                const prev = a[key];
+                                return {
+                                  ...a,
+                                  [key]: prev === 'map' || prev === 'both' ? 'both' : 'list',
+                                };
+                              });
                             }}
                             style={{
                               padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:onList?'default':'pointer',
@@ -3352,7 +3374,14 @@ function AddSpotsSheet({
                               if (onMap && onList) return;
                               const payload = placePayload(place);
                               if (!onMap) onAddPlaceToMap(payload);
-                              if (!onList) onAddPlaceToList(payload, lid, undefined, { skipMapPing: !onMap });
+                              if (!onList) {
+                                onAddPlaceToList(
+                                  payload,
+                                  lid,
+                                  userLists.find((l) => l && l.id === lid),
+                                  { skipMapPing: !onMap },
+                                );
+                              }
                               setAddedPlaces((a) => ({ ...a, [key]: 'both' }));
                             }}
                             style={{
@@ -3395,9 +3424,45 @@ function AddSpotsSheet({
                   <div style={{color: reviewLight ? '#6b7280' : C.textSec,fontSize:12,marginBottom:10,fontWeight:700}}>
                     Selected: <span style={{color: reviewLight ? '#111827' : 'white',fontWeight:900}}>{selectedPlaces.length}</span> spot(s)
                   </div>
+                  <div style={{
+                    display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:10,
+                  }}>
+                    <label style={{
+                      color: reviewLight ? '#6b7280' : C.textSec,fontSize:12,fontWeight:800,
+                      flex:'0 0 auto',
+                    }}>
+                      Default list
+                    </label>
+                    <select
+                      data-testid="addspots-bulk-list-select"
+                      aria-label="Default list for rows set to Default (first list)"
+                      value={bulkImportListId}
+                      onChange={(e) => setBulkImportListId(e.target.value)}
+                      disabled={userLists.length === 0}
+                      style={{
+                        flex:'1 1 200px',minWidth:160,
+                        padding:'10px 12px',borderRadius:12,
+                        background: reviewLight ? '#ffffff' : 'rgba(255,255,255,0.08)',
+                        border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
+                        color: reviewLight ? '#111827' : 'white',
+                        fontSize:12,fontWeight:700,
+                      }}
+                    >
+                      {userLists.length === 0 ? (
+                        <option value="">No lists yet</option>
+                      ) : (
+                        userLists.map((l) => (
+                          <option key={l.id} value={l.id}>{`${l.icon ? `${l.icon} ` : ''}${l.name}`}</option>
+                        ))
+                      )}
+                    </select>
+                  </div>
                   <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
-                    <button type="button" onClick={()=>saveSelectedToList(defaultImportListId)}
-                      disabled={selectedPlaces.length===0 || userLists.length===0 || !defaultImportListId}
+                    <button
+                      type="button"
+                      data-testid="addspots-bulk-add-to-list"
+                      onClick={saveSelectedToList}
+                      disabled={selectedPlaces.length === 0 || userLists.length === 0}
                       style={{
                         flex: showImportReview ? '1 1 140px' : '0 1 auto',
                         padding:'12px 14px',borderRadius:14,
@@ -3405,10 +3470,11 @@ function AddSpotsSheet({
                         background: reviewLight ? '#f3f4f6' : C.glass,
                         color: reviewLight ? '#111827' : 'white',
                         fontWeight:900,fontSize:13,
-                        cursor:selectedPlaces.length&&userLists.length&&defaultImportListId?'pointer':'not-allowed',
-                        opacity:selectedPlaces.length&&userLists.length&&defaultImportListId?1:0.45,
+                        cursor:selectedPlaces.length && userLists.length ? 'pointer' : 'not-allowed',
+                        opacity:selectedPlaces.length && userLists.length ? 1 : 0.45,
                         display:'flex',alignItems:'center',justifyContent:'center',gap:8,
-                      }}>
+                      }}
+                    >
                       <span aria-hidden="true">☰</span>
                       Add to List
                     </button>
@@ -3430,8 +3496,8 @@ function AddSpotsSheet({
                     <button
                       type="button"
                       data-testid="addspots-bulk-map-and-list"
-                      onClick={() => saveSelectedMapAndList(defaultImportListId)}
-                      disabled={selectedPlaces.length===0 || userLists.length===0 || !defaultImportListId}
+                      onClick={saveSelectedMapAndList}
+                      disabled={selectedPlaces.length===0 || userLists.length===0}
                       style={{
                         flex: showImportReview ? '1 1 200px' : '0 1 auto',
                         padding:'12px 14px',borderRadius:14,
@@ -3439,8 +3505,8 @@ function AddSpotsSheet({
                         background:'rgba(0,229,212,0.12)',
                         color: reviewLight ? '#0f766e' : C.biolumeB,
                         fontWeight:900,fontSize:13,
-                        cursor:selectedPlaces.length&&userLists.length&&defaultImportListId?'pointer':'not-allowed',
-                        opacity:selectedPlaces.length&&userLists.length&&defaultImportListId?1:0.45,
+                        cursor:selectedPlaces.length&&userLists.length?'pointer':'not-allowed',
+                        opacity:selectedPlaces.length&&userLists.length?1:0.45,
                         display:'flex',alignItems:'center',justifyContent:'center',gap:8,
                       }}
                     >
