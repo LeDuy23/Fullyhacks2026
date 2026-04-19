@@ -222,6 +222,21 @@ function ExtractInsightsSummary({ row }) {
   const budget = row.budget_signal || 'unknown';
   const pace = row.pace_signal || 'unknown';
   const notes = (row.notes || '').trim();
+  const reviewStatus = String(row.review_status || '');
+  const failureReason = String(row.failure_reason || '');
+  const reviewText = (
+    reviewStatus === 'auto_confirmed' ? 'Ready to save' :
+    reviewStatus === 'not_travel_relevant' ? 'Not travel-relevant' :
+    reviewStatus === 'needs_review' ? 'Needs review' : ''
+  );
+  const failureText = (
+    failureReason === 'instagram_access_blocked' ? 'Instagram blocked caption/video access for this URL.' :
+    failureReason === 'video_download_failed' ? 'Could not download the video for analysis.' :
+    failureReason === 'places_unavailable' ? 'Maps place resolution is unavailable right now.' :
+    failureReason === 'places_no_match' ? 'Could not confidently match extracted places.' :
+    failureReason === 'no_location_signal' ? 'No clear location signal found in this source.' :
+    failureReason === 'pipeline_error' ? 'Pipeline hit an internal error.' : ''
+  );
   const chipStyle = (bg) => ({
     display:'inline-block', padding:'4px 10px', borderRadius:99, fontSize:11, fontWeight:700,
     background: bg || 'rgba(0,229,212,0.15)', color: C.biolume, marginRight:6, marginBottom:6,
@@ -237,12 +252,30 @@ function ExtractInsightsSummary({ row }) {
     >
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, flexWrap:'wrap', gap:8 }}>
         <span style={{ color:C.biolume, fontSize:12, fontWeight:800, letterSpacing:0.4 }}>AI extraction</span>
-        <span style={{
-          fontSize:11, fontWeight:800, padding:'4px 10px', borderRadius:99,
-          background: travelOk ? 'rgba(0,229,212,0.2)' : 'rgba(255,110,122,0.2)',
-          color: travelOk ? C.biolume : '#ffb3bc',
-        }}>{travelOk ? 'Travel signal: strong' : 'Travel signal: weak'}</span>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap', justifyContent:'flex-end' }}>
+          <span style={{
+            fontSize:11, fontWeight:800, padding:'4px 10px', borderRadius:99,
+            background: travelOk ? 'rgba(0,229,212,0.2)' : 'rgba(255,110,122,0.2)',
+            color: travelOk ? C.biolume : '#ffb3bc',
+          }}>{travelOk ? 'Travel signal: strong' : 'Travel signal: weak'}</span>
+          {reviewText ? (
+            <span style={{
+              fontSize:11, fontWeight:800, padding:'4px 10px', borderRadius:99,
+              background: reviewStatus === 'auto_confirmed' ? 'rgba(110,231,183,0.2)' : 'rgba(255,255,255,0.12)',
+              color: reviewStatus === 'auto_confirmed' ? '#9bf2cc' : '#f2f5ff',
+            }}>Status: {reviewText}</span>
+          ) : null}
+        </div>
       </div>
+      {failureText ? (
+        <div style={{
+          marginBottom:10, padding:'8px 10px', borderRadius:10,
+          background:'rgba(255,110,122,0.12)', border:'1px solid rgba(255,110,122,0.28)',
+          color:'#ffc3ca', fontSize:11, fontWeight:700,
+        }}>
+          {failureText}
+        </div>
+      ) : null}
       {dests.length > 0 && (
         <div style={{ marginBottom:10 }}>
           <div style={{ color:C.textMut, fontSize:10, fontWeight:800, marginBottom:6, textTransform:'uppercase' }}>Destinations</div>
@@ -434,6 +467,8 @@ function fetchNearbyFoodAndFun(lat, lng, profile) {
             vicinity: p.vicinity || '',
             km,
             bucket,
+            lat: plat,
+            lng: plng,
           });
         }
         rows.sort((a, b) => a.km - b.km);
@@ -2040,6 +2075,7 @@ function AddSpotsSheet({
   userLists = [],
   onAddPlaceToMap = () => {},
   onAddPlaceToList = () => {},
+  onCreateList = () => '',
 }) {
   const extractFileInputRef = useRef(null);
   const [view, setView] = useState('grid');
@@ -2049,18 +2085,28 @@ function AddSpotsSheet({
   const [extractLoading, setExtractLoading] = useState(false);
   const [extractErr, setExtractErr] = useState('');
   const [extractJson, setExtractJson] = useState(null);
+  const [extractMeta, setExtractMeta] = useState(null);
+  const [showImportReview, setShowImportReview] = useState(false);
   const [listPickByIdx, setListPickByIdx] = useState({});
   const [addedPlaces, setAddedPlaces] = useState({});
+  const [selectedPlaceKeys, setSelectedPlaceKeys] = useState({});
+  const [bulkListId, setBulkListId] = useState('');
+  const [newListName, setNewListName] = useState('');
   /** How user opened analyze: notes = list paste only (no social URL blurb). */
   const [extractEntry, setExtractEntry] = useState('links');
   const [tiktokSearchQuery, setTiktokSearchQuery] = useState('');
   const resetExtractPanel = () => {
     setExtractErr('');
     setExtractJson(null);
+    setExtractMeta(null);
+    setShowImportReview(false);
     setExtractText('');
     setExtractImage(null);
     setListPickByIdx({});
     setAddedPlaces({});
+    setSelectedPlaceKeys({});
+    setBulkListId('');
+    setNewListName('');
     setExtractEntry('links');
   };
   const openExtract = (entry = 'links') => {
@@ -2131,8 +2177,16 @@ function AddSpotsSheet({
         });
         const job = await pollReelExtractionJob(jid);
         setExtractJson(job.result.extract);
+        setExtractMeta(job.result || null);
+        setShowImportReview(true);
         setListPickByIdx({});
         setAddedPlaces({});
+        const p = pickPlacesFromExtract(job.result.extract);
+        const picked = {};
+        p.places.forEach((place, idx) => {
+          picked[`${idx}-${place.name}`] = true;
+        });
+        setSelectedPlaceKeys(picked);
       } catch (e) {
         setExtractErr(e?.message || String(e));
       } finally {
@@ -2184,8 +2238,16 @@ function AddSpotsSheet({
         body: JSON.stringify(body),
       });
       setExtractJson(data);
+      setExtractMeta({ source: { url: firstUrlInText(pasted) || '', thumbnail_url: extractImage?.preview || null } });
+      setShowImportReview(false);
       setListPickByIdx({});
       setAddedPlaces({});
+      const p = pickPlacesFromExtract(data);
+      const picked = {};
+      p.places.forEach((place, idx) => {
+        picked[`${idx}-${place.name}`] = true;
+      });
+      setSelectedPlaceKeys(picked);
     } catch (e) {
       setExtractErr(e?.message || String(e));
     } finally {
@@ -2194,7 +2256,38 @@ function AddSpotsSheet({
   };
 
   const extractPlacesInfo = extractJson ? pickPlacesFromExtract(extractJson) : { places: [], destinationHint: '' };
-  const getListPick = (idx) => listPickByIdx[idx] || userLists[0]?.id || '';
+  const getListPick = (idx) => listPickByIdx[idx] || '';
+  const sourceThumb =
+    extractMeta?.source?.thumbnail_url ||
+    (extractImage && extractImage.preview) ||
+    null;
+  const sourceUrl = extractMeta?.source?.url || '';
+  const selectedPlaces = extractPlacesInfo.places.filter((place, idx) => selectedPlaceKeys[`${idx}-${place.name}`]);
+  const togglePlacePicked = (key) => setSelectedPlaceKeys((s) => ({ ...s, [key]: !s[key] }));
+  const toggleAllPicked = () => {
+    const keys = extractPlacesInfo.places.map((place, idx) => `${idx}-${place.name}`);
+    const allOn = keys.length > 0 && keys.every((k) => selectedPlaceKeys[k]);
+    const next = {};
+    keys.forEach((k) => { next[k] = !allOn; });
+    setSelectedPlaceKeys(next);
+  };
+  const saveSelectedToMap = () => {
+    selectedPlaces.forEach((place) => onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint }));
+  };
+  const saveSelectedToList = (listId) => {
+    if (!listId) return;
+    selectedPlaces.forEach((place) => onAddPlaceToList({ name: place.name, destinationHint: extractPlacesInfo.destinationHint }, listId));
+  };
+  const createListAndSave = () => {
+    const nm = newListName.trim();
+    if (!nm) return;
+    const id = onCreateList(nm);
+    if (id) {
+      saveSelectedToList(id);
+      setBulkListId(id);
+      setNewListName('');
+    }
+  };
 
   const cardBase = {
     padding:'18px',borderRadius:18,textAlign:'left',cursor:'pointer',
@@ -2239,6 +2332,8 @@ function AddSpotsSheet({
               border:`1px solid ${C.glassBd}`,color:C.textSec,fontSize:18,cursor:'pointer',
               display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
         </div>
+        {!showImportReview ? (
+          <>
         <h3 style={{color:'white',fontSize:18,fontWeight:900,marginBottom:8}}>
           {extractEntry === 'notes' ? 'Paste your list' : 'Analyze text or image'}
         </h3>
@@ -2291,6 +2386,15 @@ function AddSpotsSheet({
             cursor:extractLoading?'wait':'pointer',opacity:extractLoading?0.7:1}}>
           {extractLoading ? 'Analyzing…' : 'Run AI extract'}
         </button>
+          </>
+        ) : (
+          <div style={{marginBottom:12}}>
+            <h3 style={{color:'white',fontSize:18,fontWeight:900,marginBottom:6}}>Import Locations</h3>
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,marginBottom:0}}>
+              Review extracted spots, then save selected ones to your map or lists.
+            </p>
+          </div>
+        )}
         {extractErr && (
           <div data-testid="addspots-extract-error" style={{marginTop:12,padding:12,borderRadius:12,
             background:'rgba(255,110,122,0.12)',color:'#ffb3bc',fontSize:12}}>{extractErr}</div>
@@ -2298,14 +2402,37 @@ function AddSpotsSheet({
         {extractJson && (
           <div data-testid="addspots-extract-result" style={{marginTop:14}}>
             <ExtractInsightsSummary row={extractJson?.results?.[0]} />
+            {(sourceThumb || sourceUrl) ? (
+              <div style={{marginBottom:12,padding:12,borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
+                <div style={{color:C.textMut,fontSize:10,fontWeight:800,marginBottom:8,textTransform:'uppercase'}}>Imported from video</div>
+                <div style={{display:'flex',gap:10,alignItems:'center'}}>
+                  {sourceThumb ? (
+                    <img src={sourceThumb} alt="" style={{width:72,height:72,borderRadius:10,objectFit:'cover',border:`1px solid ${C.glassBd}`}} />
+                  ) : (
+                    <div style={{width:72,height:72,borderRadius:10,background:'rgba(255,255,255,0.06)',border:`1px solid ${C.glassBd}`,
+                      display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>🎬</div>
+                  )}
+                  <div style={{minWidth:0}}>
+                    <div style={{color:'white',fontSize:12,fontWeight:700,marginBottom:4}}>Import Locations</div>
+                    <div style={{color:C.textSec,fontSize:11,wordBreak:'break-all'}}>{sourceUrl || 'Reel / video import'}</div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {extractPlacesInfo.places.length === 0 ? (
               <div style={{padding:12,borderRadius:12,background:C.glass,color:C.textSec,fontSize:13}}>
                 No places were detected. Try pasting a caption with venue names, or check the raw response below.
               </div>
             ) : (
               <>
-                <div style={{color:C.biolume,fontSize:12,fontWeight:800,marginBottom:10,letterSpacing:0.5}}>
-                  Places we found {extractPlacesInfo.destinationHint ? `· near ${extractPlacesInfo.destinationHint}` : ''}
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,gap:8,flexWrap:'wrap'}}>
+                  <div style={{color:C.biolume,fontSize:12,fontWeight:800,letterSpacing:0.5}}>
+                    We found {extractPlacesInfo.places.length} locations {extractPlacesInfo.destinationHint ? `· near ${extractPlacesInfo.destinationHint}` : ''}
+                  </div>
+                  <button type="button" onClick={toggleAllPicked}
+                    style={{padding:'6px 10px',borderRadius:10,background:'rgba(255,255,255,0.08)',border:`1px solid ${C.glassBd}`,color:'white',fontSize:11,cursor:'pointer'}}>
+                    {selectedPlaces.length === extractPlacesInfo.places.length ? 'Unselect all' : 'Select all'}
+                  </button>
                 </div>
                 <div style={{display:'flex',flexDirection:'column',gap:10,maxHeight:280,overflowY:'auto'}}>
                   {extractPlacesInfo.places.map((place, idx) => {
@@ -2313,10 +2440,22 @@ function AddSpotsSheet({
                     const st = addedPlaces[key];
                     return (
                       <div key={key} style={{padding:12,borderRadius:14,background:C.glass,border:`1px solid ${C.glassBd}`}}>
-                        <div style={{color:'white',fontWeight:800,fontSize:14,marginBottom:4}}>{place.name}</div>
-                        <div style={{color:C.textSec,fontSize:11,marginBottom:10}}>
-                          {place.type}
-                          {place.confidence != null ? ` · ${Math.round((place.confidence || 0) * 100)}% match` : ''}
+                        <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+                          <button type="button" onClick={()=>togglePlacePicked(key)}
+                            style={{marginTop:2,width:20,height:20,borderRadius:'50%',border:`1px solid ${C.biolume}`,
+                              background:selectedPlaceKeys[key] ? C.biolume : 'transparent',color:selectedPlaceKeys[key] ? C.deep : C.biolume,
+                              cursor:'pointer',fontWeight:900,fontSize:12,flexShrink:0}}>
+                            {selectedPlaceKeys[key] ? '✓' : ''}
+                          </button>
+                          <img src={sourceThumb || 'https://placehold.co/72x72?text=Spot'} alt=""
+                            style={{width:54,height:54,borderRadius:10,objectFit:'cover',border:`1px solid ${C.glassBd}`,flexShrink:0}} />
+                          <div style={{minWidth:0,flex:1}}>
+                            <div style={{color:'white',fontWeight:800,fontSize:14,marginBottom:4}}>{place.name}</div>
+                            <div style={{color:C.textSec,fontSize:11,marginBottom:10}}>
+                              {place.type}
+                              {place.confidence != null ? ` · ${Math.round((place.confidence || 0) * 100)}% match` : ''}
+                            </div>
+                          </div>
                         </div>
                         <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>
                           <button
@@ -2345,9 +2484,12 @@ function AddSpotsSheet({
                             {userLists.length === 0 ? (
                               <option value="">Create a list first</option>
                             ) : (
-                              userLists.map((l) => (
-                                <option key={l.id} value={l.id}>{l.name}</option>
-                              ))
+                              <>
+                                <option value="">Select list…</option>
+                                {userLists.map((l) => (
+                                  <option key={l.id} value={l.id}>{l.name}</option>
+                                ))}
+                              </>
                             )}
                           </select>
                           <button
@@ -2373,6 +2515,42 @@ function AddSpotsSheet({
                       </div>
                     );
                   })}
+                </div>
+                <div style={{marginTop:12,padding:12,borderRadius:14,background:'rgba(0,229,212,0.06)',border:`1px solid rgba(0,229,212,0.2)`}}>
+                  <div style={{color:C.textSec,fontSize:11,marginBottom:8}}>
+                    Selected: <span style={{color:'white',fontWeight:800}}>{selectedPlaces.length}</span> spot(s)
+                  </div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
+                    <button type="button" onClick={saveSelectedToMap} disabled={selectedPlaces.length===0}
+                      style={{padding:'10px 12px',borderRadius:10,border:`1px solid ${C.biolume}`,background:'rgba(0,229,212,0.12)',
+                        color:C.biolume,fontWeight:800,fontSize:12,cursor:selectedPlaces.length?'pointer':'default',opacity:selectedPlaces.length?1:0.45}}>
+                      Save Spots to Map
+                    </button>
+                    <select value={bulkListId} onChange={(e)=>setBulkListId(e.target.value)}
+                      style={{padding:'10px 10px',borderRadius:10,background:'rgba(255,255,255,0.08)',border:`1px solid ${C.glassBd}`,color:'white',fontSize:12,maxWidth:180}}>
+                      {userLists.length === 0 ? <option value="">No list yet</option> : (
+                        <>
+                          <option value="">Select list…</option>
+                          {userLists.map((l)=><option key={l.id} value={l.id}>{l.name}</option>)}
+                        </>
+                      )}
+                    </select>
+                    <button type="button" onClick={()=>saveSelectedToList(bulkListId)}
+                      disabled={selectedPlaces.length===0 || userLists.length===0 || !bulkListId}
+                      style={{padding:'10px 12px',borderRadius:10,border:`1px solid ${C.glassBd}`,background:C.glass,color:'white',fontWeight:800,fontSize:12,
+                        cursor:selectedPlaces.length&&userLists.length&&bulkListId?'pointer':'default',opacity:selectedPlaces.length&&userLists.length&&bulkListId?1:0.45}}>
+                      Add to List
+                    </button>
+                  </div>
+                  <div style={{display:'flex',gap:8}}>
+                    <input value={newListName} onChange={(e)=>setNewListName(e.target.value)} placeholder="New list name"
+                      style={{flex:1,padding:'10px 12px',borderRadius:10,background:'rgba(255,255,255,0.08)',border:`1px solid ${C.glassBd}`,color:'white',fontSize:12}} />
+                    <button type="button" onClick={createListAndSave} disabled={!newListName.trim() || selectedPlaces.length===0}
+                      style={{padding:'10px 12px',borderRadius:10,border:'none',background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
+                        fontWeight:900,fontSize:12,cursor:newListName.trim()&&selectedPlaces.length?'pointer':'default',opacity:newListName.trim()&&selectedPlaces.length?1:0.45}}>
+                      New List + Save
+                    </button>
+                  </div>
                 </div>
               </>
             )}
@@ -2630,7 +2808,7 @@ function ActionSheet({onClose, onAction}) {
 }
 
 /* ─── SPOTS TAB ─── */
-function SpotsTab({ onAddSpots, savedSpots, userLists }) {
+function SpotsTab({ onAddSpots, savedSpots, userLists, onNearbyMapSync = () => {} }) {
   const [filter, setFilter] = useState('All');
   const [userLoc, setUserLoc] = useState(null);
   const [geoState, setGeoState] = useState('idle');
@@ -2707,6 +2885,15 @@ function SpotsTab({ onAddSpots, savedSpots, userLists }) {
     run();
     return () => { cancelled = true; };
   }, [filter, geoState, userLoc]);
+
+  useEffect(() => {
+    onNearbyMapSync({
+      active: filter === 'Nearby',
+      geoState,
+      userLoc,
+      nearbyDiscover,
+    });
+  }, [filter, geoState, userLoc, nearbyDiscover, onNearbyMapSync]);
 
   const withCoords = allSpots.filter((s) => s.lat != null && s.lng != null && !Number.isNaN(s.lat) && !Number.isNaN(s.lng));
   const nearbySpots = userLoc
@@ -2988,6 +3175,8 @@ function MainApp({ onSignOut }) {
   const sharedMapRef = useRef(null);
   const tripMarkersRef = useRef([]);
   const userPlaceMarkersRef = useRef([]);
+  const nearbyPlaceMarkersRef = useRef([]);
+  const nearbyUserMarkerRef = useRef(null);
   const profileWrapRef = useRef(null);
   const headerSearchRef = useRef(null);
   const headerPlaceDetailRef = useRef(null);
@@ -3142,6 +3331,69 @@ function MainApp({ onSignOut }) {
     userPlaceMarkersRef.current = [];
   };
 
+  const clearNearbyMarkers = () => {
+    nearbyPlaceMarkersRef.current.forEach((m) => m.setMap(null));
+    nearbyPlaceMarkersRef.current = [];
+    if (nearbyUserMarkerRef.current) {
+      nearbyUserMarkerRef.current.setMap(null);
+      nearbyUserMarkerRef.current = null;
+    }
+  };
+
+  const syncNearbyMap = useCallback(({ active, geoState, userLoc, nearbyDiscover }) => {
+    const map = sharedMapRef.current;
+    if (!map || !window.google || !google.maps) return;
+    if (!active || geoState !== 'ready' || !userLoc) {
+      clearNearbyMarkers();
+      return;
+    }
+
+    clearNearbyMarkers();
+
+    nearbyUserMarkerRef.current = new google.maps.Marker({
+      position: { lat: userLoc.lat, lng: userLoc.lng },
+      map,
+      title: 'You are here',
+      label: {
+        text: '🧍',
+        fontSize: '18px',
+      },
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 9,
+        fillColor: '#3b82f6',
+        fillOpacity: 1,
+        strokeColor: 'white',
+        strokeWeight: 2,
+      },
+      zIndex: 1000,
+    });
+
+    const nearbyRows = [...(nearbyDiscover?.food || []), ...(nearbyDiscover?.fun || [])]
+      .filter((p) => p && typeof p.lat === 'number' && typeof p.lng === 'number')
+      .slice(0, 16);
+
+    nearbyRows.forEach((p) => {
+      const marker = new google.maps.Marker({
+        position: { lat: p.lat, lng: p.lng },
+        map,
+        title: p.name || 'Nearby place',
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: p.bucket === 'food' ? '#ffb84d' : '#a78bfa',
+          fillOpacity: 1,
+          strokeColor: 'white',
+          strokeWeight: 2,
+        },
+      });
+      nearbyPlaceMarkersRef.current.push(marker);
+    });
+
+    map.panTo({ lat: userLoc.lat, lng: userLoc.lng });
+    map.setZoom(13);
+  }, []);
+
   const addPlaceToMap = (place) => {
     if (!window.google || !google.maps) {
       alert('Map is still loading — try again in a moment.');
@@ -3234,11 +3486,17 @@ function MainApp({ onSignOut }) {
     });
   };
 
-  const handleCreateList = (name) => {
+  const createListInline = (name) => {
     const id = `list-${Date.now()}`;
     setUserLists((ls) => [...ls, { id, name, icon: '📋', color: C.biolume }]);
+    return id;
+  };
+
+  const handleCreateList = (name) => {
+    const id = createListInline(name);
     setPanel(null);
     setTab('spots');
+    return id;
   };
 
   const handleTripClick = (t) => {
@@ -3299,6 +3557,7 @@ function MainApp({ onSignOut }) {
   const handleBack = () => {
     setPanel(null);
     clearTripMarkers();
+    clearNearbyMarkers();
     if (sharedMapRef.current) {
       sharedMapRef.current.panTo({ lat: 20, lng: 10 });
       sharedMapRef.current.setZoom(2);
@@ -3645,6 +3904,7 @@ function MainApp({ onSignOut }) {
                   onAddSpots={() => setPanel('addspots')}
                   savedSpots={savedSpots}
                   userLists={userLists}
+                  onNearbyMapSync={syncNearbyMap}
                 />
               )}
             </div>
@@ -3664,6 +3924,7 @@ function MainApp({ onSignOut }) {
               userLists={userLists}
               onAddPlaceToMap={addPlaceToMap}
               onAddPlaceToList={addPlaceToList}
+              onCreateList={createListInline}
             />
           )}
           {panel==='newlist' && (

@@ -86,14 +86,21 @@ post_id must be exactly: {json.dumps(post.post_id)}
 
 def extract_post(post: NormalizedPost) -> ExtractedPost:
     if (post.image_base64 or "").strip():
-        return _extract_from_image_post(post)
-    prompt = f"""{EXTRACT_SYSTEM_PROMPT.strip()}
+        out = _extract_from_image_post(post)
+    else:
+        prompt = f"""{EXTRACT_SYSTEM_PROMPT.strip()}
 
 Return ONLY valid JSON matching the requested shape. No explanation.
 
 {build_extract_prompt(post).strip()}
 """
-    return call_llm_validated(prompt, ExtractedPost)
+        out = call_llm_validated(prompt, ExtractedPost)
+
+    if not out.is_travel_relevant:
+        return out.model_copy(update={"review_status": "not_travel_relevant", "failure_reason": "no_location_signal"})
+    if len(out.place_candidates) == 0:
+        return out.model_copy(update={"review_status": "needs_review", "failure_reason": "no_location_signal"})
+    return out.model_copy(update={"review_status": "needs_review", "failure_reason": "none"})
 
 
 def extract_posts(posts: List[NormalizedPost]) -> List[ExtractedPost]:

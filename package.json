@@ -2,7 +2,9 @@
   "name": "fullyhacks2026",
   "private": true,
   "scripts": {
-    "dev": "serve -l 4321 .",
+    "dev": "python3 -m http.server 4321 --bind 127.0.0.1",
+    "backend": "python3 -m uvicorn app.main:app --reload --port 8000",
+    "extract": "npm run backend",
     "build": "node scripts/gsd-static-build.mjs",
     "gsd": "gsd-sdk",
     "gsd:version": "gsd-sdk --version",

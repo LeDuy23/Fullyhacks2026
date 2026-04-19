@@ -66,6 +66,14 @@ def _build_extracted_post(
                 )
             )
 
+    matched_count = sum(1 for p in resolved if p is not None)
+    review_status = "auto_confirmed" if place_candidates and matched_count == len(place_candidates) else "needs_review"
+    failure_reason = "none"
+    if not place_candidates:
+        failure_reason = "no_location_signal"
+    elif matched_count == 0:
+        failure_reason = "places_no_match"
+
     notes = f"Reel-to-map pipeline for {source_url[:120]}"
     return ExtractedPost(
         post_id=post_id,
@@ -78,6 +86,8 @@ def _build_extracted_post(
         budget_signal="unknown",
         pace_signal="unknown",
         notes=notes,
+        review_status=review_status,
+        failure_reason=failure_reason,
     )
 
 
@@ -89,7 +99,17 @@ def _fallback_caption_only(url: str) -> ExtractedPost:
         platform=detect_platform(url),
         raw_text=url,
     )
-    return extract_post(enrich_normalized_post(post))
+    extracted = extract_post(enrich_normalized_post(post))
+    if not extracted.is_travel_relevant:
+        reason = "no_location_signal"
+        if detect_platform(url) == "instagram":
+            reason = "instagram_access_blocked"
+        extracted = extracted.model_copy(update={"review_status": "not_travel_relevant", "failure_reason": reason})
+    elif len(extracted.place_candidates) == 0:
+        extracted = extracted.model_copy(update={"review_status": "needs_review", "failure_reason": "no_location_signal"})
+    else:
+        extracted = extracted.model_copy(update={"review_status": "needs_review", "failure_reason": "none"})
+    return extracted
 
 
 def run_reel_extraction_job(job_id: str) -> None:
@@ -106,14 +126,14 @@ def run_reel_extraction_job(job_id: str) -> None:
     try:
         post_id = f"job-{job_id[:8]}"
 
+        source_meta: dict[str, Any] = {"url": source_url, "platform": detect_platform(source_url)}
+
         if is_google_maps_url(source_url):
             q = maps_url_to_query_text(source_url) or source_url
             queries = maps_url_query_candidates(source_url) or [q, source_url]
             debug["maps_queries"] = queries
             if not places_available():
-                raise RuntimeError(
-                    "GOOGLE_MAPS_API_KEY is not set — cannot resolve Google Maps links server-side."
-                )
+                raise RuntimeError("places_unavailable: GOOGLE_MAPS_API_KEY is not set")
             places: list[dict[str, Any]] = []
             used_query = q
             for query in queries:
@@ -160,6 +180,7 @@ def run_reel_extraction_job(job_id: str) -> None:
                 "resolved_places": [pin.model_dump()],
                 "mode": "google_maps_direct",
                 "debug": debug,
+                "source": source_meta,
             }
             update_job(
                 job_id,
@@ -180,6 +201,15 @@ def run_reel_extraction_job(job_id: str) -> None:
                 pack = download_best_mp4(canonical)
                 temp_dir = pack["temp_dir"]
                 video_path = pack["video_path"]
+                md = pack.get("metadata") or {}
+                source_meta.update(
+                    {
+                        "thumbnail_url": md.get("thumbnail"),
+                        "caption": md.get("description") or md.get("title"),
+                        "author": md.get("uploader"),
+                        "platform": detect_platform(canonical),
+                    }
+                )
                 used_video = True
                 reel_locs = extract_locations_from_video_file(video_path).locations
                 debug["yt_dlp"] = "ok"
@@ -210,14 +240,18 @@ def run_reel_extraction_job(job_id: str) -> None:
                 "resolved_places": [p.model_dump() if p else None for p in resolved_pins],
                 "mode": "gemini_video",
                 "debug": debug,
+                "source": source_meta,
             }
         else:
             extracted = _fallback_caption_only(canonical)
+            if "video_error" in debug and extracted.failure_reason in {"none", "no_location_signal"}:
+                extracted = extracted.model_copy(update={"failure_reason": "video_download_failed"})
             result = {
                 "extract": {"results": [extracted.model_dump()]},
                 "resolved_places": [],
                 "mode": "caption_oembed_fallback",
                 "debug": debug,
+                "source": source_meta,
             }
 
         update_job(

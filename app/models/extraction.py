@@ -5,6 +5,16 @@ from pydantic import BaseModel, Field
 TimeOfDay = Literal["morning", "afternoon", "evening", "night", "flexible"]
 BudgetSignal = Literal["budget", "medium", "luxury", "unknown"]
 PaceSignal = Literal["relaxed", "moderate", "packed", "unknown"]
+ReviewStatus = Literal["auto_confirmed", "needs_review", "not_travel_relevant"]
+FailureReason = Literal[
+    "none",
+    "instagram_access_blocked",
+    "video_download_failed",
+    "no_location_signal",
+    "places_unavailable",
+    "places_no_match",
+    "pipeline_error",
+]
 
 
 class NormalizedPost(BaseModel):
@@ -44,6 +54,8 @@ class ExtractedPost(BaseModel):
     budget_signal: BudgetSignal
     pace_signal: PaceSignal
     notes: str
+    review_status: ReviewStatus = "needs_review"
+    failure_reason: FailureReason = "none"
 
 
 class ExtractRequest(BaseModel):
