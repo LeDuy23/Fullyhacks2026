@@ -1,0 +1,3 @@
+-- Optional seed data for local development.
+-- Example:
+-- insert into public.users (email, display_name) values ('dev@example.com', 'Dev User');
