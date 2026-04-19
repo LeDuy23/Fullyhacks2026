@@ -41,6 +41,11 @@ class PlaceCandidate(BaseModel):
     type: str
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str
+    # When the reel pipeline resolves a venue via Google Places, clients can pin exactly.
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    google_place_id: Optional[str] = None
+    formatted_address: Optional[str] = None
 
 
 class ExtractedPost(BaseModel):

@@ -54,6 +54,10 @@ def _build_extracted_post(
                     type=(pin.types[0] if pin.types else loc.type) or "place",
                     confidence=conf,
                     reason=" · ".join(reason_parts) or f"Matched via Google Places (score {pin.match_score:.2f})",
+                    lat=pin.lat,
+                    lng=pin.lng,
+                    google_place_id=pin.google_place_id,
+                    formatted_address=pin.formatted_address,
                 )
             )
         else:

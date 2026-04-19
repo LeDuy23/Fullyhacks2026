@@ -250,6 +250,10 @@ function pickPlacesFromExtract(data) {
       type: p.type || 'place',
       confidence: p.confidence,
       reason: p.reason || '',
+      lat: p.lat != null ? Number(p.lat) : undefined,
+      lng: p.lng != null ? Number(p.lng) : undefined,
+      google_place_id: p.google_place_id || undefined,
+      formatted_address: p.formatted_address || undefined,
     })),
   };
 }
@@ -840,6 +844,129 @@ function roughCenterForDestination(name) {
   const s = String(name || 'trip');
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return [20 + (h % 200) / 50 - 2, 10 + ((h >> 8) % 200) / 50 - 2];
+}
+
+function isFiniteGeoNum(n) {
+  return typeof n === 'number' && Number.isFinite(n);
+}
+
+/** Try several address strings so ambiguous venue names still geocode. */
+function geocodeUserPlaceAddressChain(geo, place, onGeocodeResult) {
+  const hint = String(place.destinationHint || '').trim();
+  const name = String(place.name || '').trim();
+  const queries = [];
+  if (hint && name) queries.push(`${name}, ${hint}`);
+  if (hint && name) queries.push(`${hint} ${name}`);
+  if (hint && name) queries.push(`${name} in ${hint}`);
+  if (name) queries.push(name);
+  if (hint) queries.push(hint);
+  const uniq = [];
+  const seen = new Set();
+  for (const q of queries) {
+    if (!q || seen.has(q)) continue;
+    seen.add(q);
+    uniq.push(q);
+  }
+  const run = (i) => {
+    if (i >= uniq.length) {
+      onGeocodeResult(null);
+      return;
+    }
+    geo.geocode({ address: uniq[i] }, (results, status) => {
+      if (status === 'OK' && results && results[0]) {
+        onGeocodeResult(results[0]);
+      } else {
+        run(i + 1);
+      }
+    });
+  };
+  run(0);
+}
+
+/**
+ * Prefer resolved lat/lng from import pipeline, then Google place_id, then address variants.
+ * @param {google.maps.Geocoder} geo
+ * @param {object} place
+ * @param {(r: google.maps.GeocoderResult | null) => void} onResult
+ */
+function resolveUserPlaceGeocode(geo, place, onResult) {
+  const lat = place.lat;
+  const lng = place.lng;
+  if (isFiniteGeoNum(lat) && isFiniteGeoNum(lng)) {
+    const loc = new google.maps.LatLng(lat, lng);
+    const fa =
+      String(place.formatted_address || '').trim() ||
+      String(place.reason || '').split(' · ')[0].trim() ||
+      '';
+    onResult({
+      geometry: { location: loc },
+      formatted_address: fa || String(place.name || ''),
+    });
+    return;
+  }
+  const pid = place.google_place_id || place.googlePlaceId;
+  if (pid) {
+    geo.geocode({ placeId: String(pid) }, (results, status) => {
+      if (status === 'OK' && results && results[0]) {
+        onResult(results[0]);
+      } else {
+        geocodeUserPlaceAddressChain(geo, place, onResult);
+      }
+    });
+    return;
+  }
+  geocodeUserPlaceAddressChain(geo, place, onResult);
+}
+
+/** Larger zoom → slightly larger ping so it stays legible; clamped for world vs street view. */
+function pingScaleForMapZoom(zoom) {
+  const z = typeof zoom === 'number' && Number.isFinite(zoom) ? zoom : 14;
+  return Math.max(6, Math.min(20, Math.round(4 + z * 0.7)));
+}
+
+function strokeWeightForPingScale(scale) {
+  return Math.max(2, Math.min(5, Math.round(scale / 3.4)));
+}
+
+/**
+ * Saved-spot ping: circle stays centered on the true lat/lng; icon rescales on zoom_changed.
+ * optimized:false keeps vector symbol sizing predictable on high-DPI screens.
+ */
+function createZoomAwareUserPingMarker({ map, position, title, fillColor, strokeColor }) {
+  const latLng =
+    position && typeof position.lat === 'function'
+      ? position
+      : new google.maps.LatLng(position.lat, position.lng);
+  const marker = new google.maps.Marker({
+    map,
+    position: latLng,
+    title: title || '',
+    optimized: false,
+  });
+  const applyIcon = () => {
+    const scale = pingScaleForMapZoom(map.getZoom());
+    marker.setIcon({
+      path: google.maps.SymbolPath.CIRCLE,
+      scale,
+      fillColor: fillColor || '#ffb84d',
+      fillOpacity: 1,
+      strokeColor: strokeColor || 'white',
+      strokeWeight: strokeWeightForPingScale(scale),
+    });
+  };
+  applyIcon();
+  const zoomListener = google.maps.event.addListener(map, 'zoom_changed', applyIcon);
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    google.maps.event.removeListener(zoomListener);
+  };
+  marker.__deepdivePingCleanup = cleanup;
+  marker.addListener('map_changed', () => {
+    if (!marker.getMap()) cleanup();
+  });
+  return marker;
 }
 
 function mapPlanFromPostsToTrip(data, destName) {
@@ -2204,6 +2331,10 @@ function AddSpotsSheet({
     setNewListName('');
     setExtractEntry('links');
   };
+  /** After saving to map/list, clear extract UI so you can paste another link or run extract again. */
+  const clearExtractAfterSave = () => {
+    resetExtractPanel();
+  };
   const openExtract = (entry = 'links') => {
     resetExtractPanel();
     setExtractEntry(entry);
@@ -2351,7 +2482,24 @@ function AddSpotsSheet({
   };
 
   const extractPlacesInfo = extractJson ? pickPlacesFromExtract(extractJson) : { places: [], destinationHint: '' };
-  const getListPick = (idx) => listPickByIdx[idx] || '';
+  const placePayload = (place) => ({
+    name: place.name,
+    destinationHint: extractPlacesInfo.destinationHint || '',
+    lat: place.lat,
+    lng: place.lng,
+    google_place_id: place.google_place_id,
+    formatted_address: place.formatted_address,
+  });
+  /** Per-row list override, else bulk list chosen for this import. */
+  const effectiveListIdForRow = (idx) => {
+    const row = listPickByIdx[idx];
+    if (row !== undefined && row !== '') return row;
+    return bulkListId || '';
+  };
+  const pickListForImport = (listId) => {
+    setBulkListId(listId);
+    setListPickByIdx({});
+  };
   const sourceThumb =
     extractMeta?.source?.thumbnail_url ||
     (extractImage && extractImage.preview) ||
@@ -2386,44 +2534,51 @@ function AddSpotsSheet({
   };
 
   const saveSelectedToMap = () => {
-    selectedPlaces.forEach((place) => onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint }));
+    if (selectedPlaces.length === 0) return;
+    selectedPlaces.forEach((place) => onAddPlaceToMap(placePayload(place)));
     bumpAddedForSelected('map');
+    clearExtractAfterSave();
   };
   const saveSelectedToList = (listId, listMeta) => {
     if (!listId) return;
+    if (selectedPlaces.length === 0) return;
     selectedPlaces.forEach((place) =>
       onAddPlaceToList(
-        { name: place.name, destinationHint: extractPlacesInfo.destinationHint },
+        placePayload(place),
         listId,
         listMeta,
       ),
     );
     bumpAddedForSelected('list');
+    clearExtractAfterSave();
   };
   /** Add every selected place to the map and the chosen list (two pins/list rows in parent). */
   const saveSelectedMapAndList = (listId, listMeta) => {
     if (!listId) return;
+    if (selectedPlaces.length === 0) return;
     selectedPlaces.forEach((place) => {
-      const payload = { name: place.name, destinationHint: extractPlacesInfo.destinationHint };
+      const payload = placePayload(place);
       onAddPlaceToMap(payload);
-      onAddPlaceToList(payload, listId, listMeta);
+      onAddPlaceToList(payload, listId, listMeta, { skipMapPing: true });
     });
     bumpAddedForSelected('both');
+    clearExtractAfterSave();
   };
   const createListAndSave = () => {
     const nm = newListName.trim();
-    if (!nm) return;
+    if (!nm || selectedPlaces.length === 0) return;
     const id = onCreateList(nm);
     if (id) {
       const meta = { id, name: nm, icon: '📋', color: C.biolume };
       selectedPlaces.forEach((place) => {
-        const payload = { name: place.name, destinationHint: extractPlacesInfo.destinationHint };
-        onAddPlaceToList(payload, id, meta);
+        const payload = placePayload(place);
+        onAddPlaceToList(payload, id, meta, { skipMapPing: true });
         onAddPlaceToMap(payload);
       });
       bumpAddedForSelected('both');
       setBulkListId(id);
       setNewListName('');
+      clearExtractAfterSave();
     }
   };
 
@@ -2700,6 +2855,75 @@ function AddSpotsSheet({
                     {selectedPlaces.length === extractPlacesInfo.places.length ? 'Unselect all' : 'Select all'}
                   </button>
                 </div>
+                {userLists.length > 0 ? (
+                  <div style={{marginBottom:12}}>
+                    <div style={{
+                      color: reviewLight ? '#111827' : 'white',
+                      fontSize:12,
+                      fontWeight:900,
+                      marginBottom:8,
+                      letterSpacing:0.2,
+                    }}>
+                      Your lists — tap one to use for this import
+                    </div>
+                    <div
+                      role="listbox"
+                      aria-label="Choose list for imported spots"
+                      style={{display:'flex',flexWrap:'wrap',gap:8}}
+                    >
+                      {userLists.map((l) => {
+                        const on = bulkListId === l.id;
+                        return (
+                          <button
+                            key={l.id}
+                            type="button"
+                            data-testid={l.id === userLists[0]?.id ? 'addspots-import-list-chip' : undefined}
+                            onClick={() => pickListForImport(l.id)}
+                            style={{
+                              display:'inline-flex',
+                              alignItems:'center',
+                              gap:8,
+                              padding:'10px 14px',
+                              borderRadius:14,
+                              cursor:'pointer',
+                              fontFamily:'inherit',
+                              fontWeight:800,
+                              fontSize:13,
+                              border: on
+                                ? `2px solid ${C.biolume}`
+                                : (reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`),
+                              background: on
+                                ? (reviewLight ? 'rgba(0,229,212,0.18)' : 'rgba(0,229,212,0.2)')
+                                : (reviewLight ? '#f9fafb' : 'rgba(255,255,255,0.06)'),
+                              color: reviewLight ? '#111827' : 'white',
+                              boxShadow: on && reviewLight ? '0 4px 14px rgba(0,229,212,0.25)' : 'none',
+                            }}
+                          >
+                            <span style={{fontSize:18,lineHeight:1}} aria-hidden="true">{l.icon || '📋'}</span>
+                            <span style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {!bulkListId ? (
+                      <div style={{marginTop:6,color: reviewLight ? '#9ca3af' : C.textMut,fontSize:11,fontWeight:600}}>
+                        Pick a list for row actions and for &quot;Add to List&quot; / &quot;Map + list&quot; below.
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div style={{
+                    marginBottom:12,
+                    padding:12,
+                    borderRadius:12,
+                    background: reviewLight ? '#fef3c7' : 'rgba(251,191,36,0.12)',
+                    color: reviewLight ? '#92400e' : '#fcd34d',
+                    fontSize:12,
+                    fontWeight:700,
+                  }}>
+                    No lists yet. Create one from the <strong>+</strong> menu, or use <strong>New List + Save</strong> at the bottom.
+                  </div>
+                )}
                 <div style={{
                   display:'flex',flexDirection:'column',gap:10,
                   maxHeight: showImportReview ? 360 : 280,
@@ -2782,11 +3006,9 @@ function AddSpotsSheet({
                             data-testid={idx === 0 ? 'addspots-add-to-map' : undefined}
                             disabled={onMap}
                             onClick={() => {
-                              onAddPlaceToMap({ name: place.name, destinationHint: extractPlacesInfo.destinationHint });
-                              setAddedPlaces((a) => {
-                                const prev = a[key];
-                                return { ...a, [key]: prev === 'list' || prev === 'both' ? 'both' : 'map' };
-                              });
+                              if (onMap) return;
+                              onAddPlaceToMap(placePayload(place));
+                              clearExtractAfterSave();
                             }}
                             style={{
                               padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:onMap?'default':'pointer',
@@ -2796,23 +3018,24 @@ function AddSpotsSheet({
                           >{onMap ? 'On map ✓' : 'Add to map'}</button>
                           <select
                             data-testid={idx === 0 ? 'addspots-list-select' : undefined}
-                            value={getListPick(idx)}
+                            aria-label={`List for ${place.name}`}
+                            value={effectiveListIdForRow(idx)}
                             onChange={(e) => setListPickByIdx((p) => ({ ...p, [idx]: e.target.value }))}
                             style={{
                               padding:'8px 10px',borderRadius:10,
                               background: reviewLight ? '#ffffff' : 'rgba(255,255,255,0.08)',
                               border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
                               color: reviewLight ? '#111827' : 'white',
-                              fontSize:12,maxWidth:160,
+                              fontSize:12,flex:1,minWidth:0,maxWidth:220,
                             }}
                           >
                             {userLists.length === 0 ? (
                               <option value="">Create a list first</option>
                             ) : (
                               <>
-                                <option value="">Select list…</option>
+                                <option value="">Use list picked above</option>
                                 {userLists.map((l) => (
-                                  <option key={l.id} value={l.id}>{l.name}</option>
+                                  <option key={l.id} value={l.id}>{`${l.icon ? `${l.icon} ` : ''}${l.name}`}</option>
                                 ))}
                               </>
                             )}
@@ -2820,18 +3043,16 @@ function AddSpotsSheet({
                           <button
                             type="button"
                             data-testid={idx === 0 ? 'addspots-add-to-list' : undefined}
-                            disabled={onList || !getListPick(idx) || userLists.length === 0}
+                            disabled={onList || !effectiveListIdForRow(idx) || userLists.length === 0}
                             onClick={() => {
-                              const lid = getListPick(idx);
+                              const lid = effectiveListIdForRow(idx);
                               if (!lid) return;
+                              if (onList) return;
                               onAddPlaceToList(
-                                { name: place.name, destinationHint: extractPlacesInfo.destinationHint },
+                                placePayload(place),
                                 lid,
                               );
-                              setAddedPlaces((a) => {
-                                const prev = a[key];
-                                return { ...a, [key]: prev === 'map' || prev === 'both' ? 'both' : 'list' };
-                              });
+                              clearExtractAfterSave();
                             }}
                             style={{
                               padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,cursor:onList?'default':'pointer',
@@ -2844,12 +3065,13 @@ function AddSpotsSheet({
                             data-testid={idx === 0 ? 'addspots-add-to-map-and-list' : undefined}
                             disabled={onMap && onList}
                             onClick={() => {
-                              const lid = getListPick(idx);
+                              const lid = effectiveListIdForRow(idx);
                               if (!lid || userLists.length === 0) return;
-                              const payload = { name: place.name, destinationHint: extractPlacesInfo.destinationHint };
+                              if (onMap && onList) return;
+                              const payload = placePayload(place);
                               if (!onMap) onAddPlaceToMap(payload);
-                              if (!onList) onAddPlaceToList(payload, lid);
-                              setAddedPlaces((a) => ({ ...a, [key]: 'both' }));
+                              if (!onList) onAddPlaceToList(payload, lid, undefined, { skipMapPing: !onMap });
+                              clearExtractAfterSave();
                             }}
                             style={{
                               padding:'8px 12px',borderRadius:10,fontWeight:800,fontSize:12,
@@ -2945,22 +3167,6 @@ function AddSpotsSheet({
                     </button>
                   </div>
                   <div style={{display:'flex',gap:10,marginTop:10,alignItems:'center',flexWrap:'wrap'}}>
-                    <select value={bulkListId} onChange={(e)=>setBulkListId(e.target.value)}
-                      style={{
-                        flex:1,minWidth:160,
-                        padding:'10px 12px',borderRadius:12,
-                        background: reviewLight ? '#ffffff' : 'rgba(255,255,255,0.08)',
-                        border: reviewLight ? '1px solid rgba(17,24,39,0.12)' : `1px solid ${C.glassBd}`,
-                        color: reviewLight ? '#111827' : 'white',
-                        fontSize:12,fontWeight:700,
-                      }}>
-                      {userLists.length === 0 ? <option value="">No list yet</option> : (
-                        <>
-                          <option value="">Select list…</option>
-                          {userLists.map((l)=><option key={l.id} value={l.id}>{l.name}</option>)}
-                        </>
-                      )}
-                    </select>
                     <input value={newListName} onChange={(e)=>setNewListName(e.target.value)} placeholder="New list name"
                       style={{
                         flex:1,minWidth:160,
@@ -3177,12 +3383,18 @@ function AddSpotsSheet({
 /* ─── NEW LIST MODAL ─── */
 function NewListModal({onClose, onCreate}) {
   const [name, setName] = useState('');
+  const trimmed = name.trim();
+  const canSubmit = trimmed.length > 0;
+  const submit = () => {
+    if (!canSubmit) return;
+    onCreate(trimmed);
+  };
   return (
     <div style={{padding:'24px',background:`linear-gradient(180deg,${C.navy},${C.deep})`,height:'100%',
       display:'flex',flexDirection:'column',alignItems:'center'}}>
       <div style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
         <h3 style={{color:'white',fontSize:20,fontWeight:900}}>New List</h3>
-        <button onClick={onClose} style={{width:32,height:32,borderRadius:'50%',background:C.glass,
+        <button type="button" onClick={onClose} style={{width:32,height:32,borderRadius:'50%',background:C.glass,
           border:`1px solid ${C.glassBd}`,color:C.textSec,fontSize:18,cursor:'pointer',
           display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
       </div>
@@ -3193,17 +3405,17 @@ function NewListModal({onClose, onCreate}) {
       </div>
       <PearlPuffer size={72}/>
       <p style={{color:C.textSec,fontSize:13,marginTop:8,marginBottom:20,textAlign:'center'}}>Pearl says: give your list a name! 📋</p>
-      <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Best Reefs in SE Asia"
+      <input value={name} onChange={e=>setName(e.target.value)} placeholder="Name your new list"
         style={{width:'100%',padding:'14px 18px',borderRadius:14,background:C.glass,
-          border:`1.5px solid ${name?C.biolume:C.glassBd}`,color:'white',fontSize:15,outline:'none',
-          boxSizing:'border-box',boxShadow:name?'0 0 16px rgba(0,229,212,0.15)':'none',transition:'all 0.3s'}}/>
+          border:`1.5px solid ${canSubmit?C.biolume:C.glassBd}`,color:'white',fontSize:15,outline:'none',
+          boxSizing:'border-box',boxShadow:canSubmit?'0 0 16px rgba(0,229,212,0.15)':'none',transition:'all 0.3s'}}/>
       <div style={{flex:1}}/>
-      <button onClick={()=>name&&onCreate(name)} style={{
+      <button type="button" onClick={submit} disabled={!canSubmit} style={{
         width:'100%',padding:'16px',borderRadius:14,fontSize:16,fontWeight:800,
-        cursor:name?'pointer':'default',
-        background:name?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.08)',
-        color:name?C.deep:'rgba(255,255,255,0.3)',border:'none',transition:'all 0.3s',
-        boxShadow:name?'0 0 28px rgba(0,229,212,0.35)':'none',
+        cursor:canSubmit?'pointer':'default',
+        background:canSubmit?`linear-gradient(135deg,${C.biolume},#00a0e9)`:'rgba(255,255,255,0.08)',
+        color:canSubmit?C.deep:'rgba(255,255,255,0.3)',border:'none',transition:'all 0.3s',
+        boxShadow:canSubmit?'0 0 28px rgba(0,229,212,0.35)':'none',
       }}>+ Create List</button>
     </div>
   );
@@ -4013,6 +4225,7 @@ function ProfileMenuMini({ onClose, onSignOut }) {
 function MainApp({ onSignOut }) {
   const [tab, setTab] = useState('trips');
   const [panel, setPanel] = useState(null);
+  const [newListModalKey, setNewListModalKey] = useState(0);
   const [actionOpen, setActionOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [importUiTheme, setImportUiTheme] = useState(() => {
@@ -4219,7 +4432,10 @@ function MainApp({ onSignOut }) {
   };
 
   const clearUserPlaceMarkers = () => {
-    userPlaceMarkersRef.current.forEach((m) => m.setMap(null));
+    userPlaceMarkersRef.current.forEach((m) => {
+      if (m && typeof m.__deepdivePingCleanup === 'function') m.__deepdivePingCleanup();
+      m.setMap(null);
+    });
     userPlaceMarkersRef.current = [];
   };
 
@@ -4294,33 +4510,26 @@ function MainApp({ onSignOut }) {
     const map = sharedMapRef.current;
     if (!map) return;
     const geo = new google.maps.Geocoder();
-    const hint = place.destinationHint || '';
-    const q = hint ? `${place.name}, ${hint}` : place.name;
-    geo.geocode({ address: q }, (results, status) => {
-      if (status !== 'OK' || !results[0]) {
+    resolveUserPlaceGeocode(geo, place, (result) => {
+      if (!result || !result.geometry || !result.geometry.location) {
         alert('Could not find that place on the map. Try a clearer name or add a region in your paste.');
         return;
       }
-      const loc = results[0].geometry.location;
+      const loc = result.geometry.location;
       clearTripMarkers();
-      const marker = new google.maps.Marker({
-        position: loc,
+      const marker = createZoomAwareUserPingMarker({
         map,
+        position: loc,
         title: place.name,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 14,
-          fillColor: '#ffb84d',
-          fillOpacity: 1,
-          strokeColor: 'white',
-          strokeWeight: 3,
-        },
+        fillColor: '#ffb84d',
+        strokeColor: 'white',
       });
       userPlaceMarkersRef.current.push(marker);
       map.panTo(loc);
       map.setZoom(14);
       const sid = `u-${Date.now()}`;
-      const addr = results[0].formatted_address || hint || place.name;
+      const hint = place.destinationHint || '';
+      const addr = result.formatted_address || hint || place.name;
       const shortLoc = typeof addr === 'string' ? addr.split(',').slice(-3).join(',').trim() : hint;
       setSavedSpots((sp) => [
         ...sp,
@@ -4338,11 +4547,30 @@ function MainApp({ onSignOut }) {
     });
   };
 
-  const addPlaceToList = (place, listId, listMeta) => {
+  const addPlaceToList = (place, listId, listMeta, opts = {}) => {
+    const skipMapPing = opts.skipMapPing === true;
     const list =
       userLists.find((l) => l.id === listId) ||
       (listMeta && listMeta.id === listId ? listMeta : null);
     if (!list) return;
+    const map = sharedMapRef.current;
+
+    const pingMapIfNeeded = (lat, lng) => {
+      if (skipMapPing || !map || !window.google || !google.maps) return;
+      clearTripMarkers();
+      const pos = { lat, lng };
+      const marker = createZoomAwareUserPingMarker({
+        map,
+        position: pos,
+        title: place.name,
+        fillColor: list.color || C.biolume,
+        strokeColor: 'white',
+      });
+      userPlaceMarkersRef.current.push(marker);
+      map.panTo(pos);
+      map.setZoom(14);
+    };
+
     const finish = (lat, lng, locLabel) => {
       const sid = `u-${Date.now()}`;
       setSavedSpots((sp) => [
@@ -4358,25 +4586,25 @@ function MainApp({ onSignOut }) {
           lng,
         },
       ]);
+      pingMapIfNeeded(lat, lng);
     };
+
     if (!window.google || !google.maps) {
-      const [la, ln] = roughCenterForDestination(place.name);
+      const [la, ln] = roughCenterForDestination(`${place.name}|${place.destinationHint || ''}`);
       finish(la, ln, place.destinationHint || '');
       return;
     }
     const geo = new google.maps.Geocoder();
-    const hint = place.destinationHint || '';
-    const q = hint ? `${place.name}, ${hint}` : place.name;
-    geo.geocode({ address: q }, (results, status) => {
-      if (status === 'OK' && results[0]) {
-        const loc = results[0].geometry.location;
-        const addr = results[0].formatted_address || hint;
-        const shortLoc = typeof addr === 'string' ? addr.split(',').slice(-3).join(',').trim() : hint;
-        finish(loc.lat(), loc.lng(), shortLoc);
-      } else {
-        const [la, ln] = roughCenterForDestination(place.name);
-        finish(la, ln, hint || place.name);
+    resolveUserPlaceGeocode(geo, place, (result) => {
+      if (!result || !result.geometry || !result.geometry.location) {
+        alert('Could not find that place on the map. Try a clearer name or add a region hint.');
+        return;
       }
+      const loc = result.geometry.location;
+      const hint = place.destinationHint || '';
+      const addr = result.formatted_address || hint;
+      const shortLoc = typeof addr === 'string' ? addr.split(',').slice(-3).join(',').trim() : hint;
+      finish(loc.lat(), loc.lng(), shortLoc);
     });
   };
 
@@ -4388,6 +4616,7 @@ function MainApp({ onSignOut }) {
 
   const handleCreateList = (name) => {
     const id = createListInline(name);
+    setNewListModalKey((k) => k + 1);
     setPanel(null);
     setTab('spots');
     return id;
@@ -4437,7 +4666,10 @@ function MainApp({ onSignOut }) {
 
   const handleAction = (id) => {
     if (id === 'trip') openPlan();
-    if (id === 'list') setPanel('newlist');
+    if (id === 'list') {
+      setNewListModalKey((k) => k + 1);
+      setPanel('newlist');
+    }
     if (id === 'spots') setPanel('addspots');
   };
 
@@ -4838,7 +5070,11 @@ function MainApp({ onSignOut }) {
             />
           )}
           {panel==='newlist' && (
-            <NewListModal onClose={() => setPanel(null)} onCreate={(name) => handleCreateList(name)} />
+            <NewListModal
+              key={newListModalKey}
+              onClose={() => setPanel(null)}
+              onCreate={(name) => handleCreateList(name)}
+            />
           )}
         </div>
       </div>
