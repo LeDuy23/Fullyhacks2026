@@ -725,8 +725,233 @@ function TripDetail({trip, onBack}) {
   );
 }
 
+/* ─── IMPORT FLOWS (light panels inside Add Spots) ─── */
+const importInk = '#0f172a';
+const importMuted = '#64748b';
+const importBlue = '#2563eb';
+const importOrangeBg = '#fff4e8';
+const importOrangeText = '#c2410c';
+const importOrangeBadge = '#ea580c';
+
+function ImportHeader({ title, onBack, onHelp }) {
+  return (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,flexShrink:0}}>
+      <button type="button" onClick={onBack} aria-label="Back" style={{
+        width:40,height:40,borderRadius:'50%',background:'#eef1f5',border:'none',
+        display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,color:importInk,
+      }}>‹</button>
+      <h2 style={{margin:0,fontSize:17,fontWeight:800,color:importInk,letterSpacing:'-0.3px'}}>{title}</h2>
+      <button type="button" onClick={onHelp} aria-label="Help" style={{
+        width:40,height:40,borderRadius:'50%',background:importBlue,border:'none',
+        display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontSize:18,fontWeight:800,
+      }}>?</button>
+    </div>
+  );
+}
+
+function ImportViaLinkFlow({ onBack }) {
+  const [step, setStep] = useState(2);
+  const [link, setLink] = useState('');
+  const help = () => window.alert('Copy a link from TikTok, Instagram, or Safari using Share → More → your app.');
+  const pasteFromClipboard = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) setLink(t);
+    } catch (_) {}
+  };
+
+  return (
+    <div style={{
+      height:'100%',display:'flex',flexDirection:'column',
+      background:'linear-gradient(180deg,#e8ecf2 0%,#f1f5f9 40%,#eef2f7 100%)',
+      padding:'16px 18px 20px',overflowY:'auto',boxSizing:'border-box',
+    }}>
+      <ImportHeader title="Import via Link" onBack={onBack} onHelp={help}/>
+      <div style={{
+        background:'white',borderRadius:20,padding:16,marginBottom:16,
+        boxShadow:'0 8px 32px rgba(15,23,42,0.08)',border:'1px solid rgba(0,0,0,0.06)',
+      }}>
+        <div style={{
+          borderRadius:14,overflow:'hidden',background:'#0f172a',minHeight:200,
+          position:'relative',marginBottom:14,
+        }}>
+          <div style={{padding:'10px 12px',background:'#1e293b',color:'#94a3b8',fontSize:11,fontWeight:700}}>Share to</div>
+          <div style={{padding:'16px',display:'flex',gap:10,justifyContent:'center',flexWrap:'wrap'}}>
+            {['💬','📧','📷','𝕏'].map((e,i)=><span key={i} style={{fontSize:22}}>{e}</span>)}
+          </div>
+          <div style={{display:'flex',justifyContent:'center',padding:'20px 0 28px'}}>
+            <div style={{position:'relative',textAlign:'center'}}>
+              <div style={{
+                width:56,height:56,borderRadius:'50%',background:importBlue,
+                display:'flex',alignItems:'center',justifyContent:'center',
+                margin:'0 auto',boxShadow:'0 0 0 6px rgba(37,99,235,0.35), 0 8px 24px rgba(37,99,235,0.4)',
+              }}>
+                <span style={{color:'white',fontSize:22,letterSpacing:2}}>•••</span>
+              </div>
+              <div style={{
+                position:'absolute',bottom:-20,left:'50%',transform:'translateX(-50%)',
+                background:'white',color:importInk,fontSize:11,fontWeight:800,padding:'4px 10px',borderRadius:8,
+                boxShadow:'0 4px 12px rgba(0,0,0,0.12)',
+              }}>TAP</div>
+            </div>
+          </div>
+        </div>
+        <p style={{margin:0,textAlign:'center',color:importInk,fontSize:15,fontWeight:700}}>
+          Click on <span style={{
+            display:'inline-flex',alignItems:'center',gap:6,verticalAlign:'middle',
+            background:'#eff6ff',color:importBlue,padding:'4px 12px',borderRadius:99,
+            fontWeight:800,marginLeft:6,
+          }}><span style={{fontSize:16}}>•••</span> Share</span>
+        </p>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+        <button type="button" onClick={()=>setStep(s=>Math.max(1,s-1))} style={{
+          width:40,height:40,borderRadius:12,background:'white',border:'1px solid #e2e8f0',
+          fontSize:18,color:importInk,
+        }}>‹</button>
+        <div style={{flex:1,display:'flex',gap:6}}>
+          {[1,2,3,4,5].map(i=>(
+            <div key={i} style={{
+              flex:1,height:6,borderRadius:99,
+              background:i===step?'#334155':'#cbd5e1',
+              transition:'background 0.2s',
+            }}/>
+          ))}
+        </div>
+        <button type="button" onClick={()=>setStep(s=>Math.min(5,s+1))} style={{
+          width:40,height:40,borderRadius:12,background:'white',border:'1px solid #e2e8f0',
+          fontSize:18,color:importInk,
+        }}>›</button>
+      </div>
+      <div style={{
+        display:'flex',alignItems:'center',gap:10,background:'white',borderRadius:16,
+        padding:'4px 4px 4px 14px',border:'1px solid #e2e8f0',boxShadow:'0 4px 16px rgba(15,23,42,0.06)',
+      }}>
+        <input value={link} onChange={e=>setLink(e.target.value)} placeholder="Tap to enter link."
+          style={{flex:1,border:'none',outline:'none',fontSize:15,color:importInk,background:'transparent',padding:'12px 0'}}/>
+        <button type="button" onClick={pasteFromClipboard} style={{
+          background:importInk,color:'white',fontWeight:800,fontSize:13,padding:'12px 18px',borderRadius:12,
+        }}>Paste</button>
+      </div>
+    </div>
+  );
+}
+
+function ImportViaScreenshotFlow({ onBack }) {
+  const fileRef = useRef(null);
+  const help = () => window.alert('Choose screenshots from Instagram saves, TikTok, or Google Maps lists for best results.');
+  return (
+    <div style={{
+      height:'100%',display:'flex',flexDirection:'column',
+      background:'linear-gradient(180deg,#e8ecf2 0%,#f1f5f9 100%)',
+      padding:'16px 18px 24px',overflowY:'auto',boxSizing:'border-box',
+    }}>
+      <ImportHeader title="Import via Screenshot" onBack={onBack} onHelp={help}/>
+      <input ref={fileRef} type="file" accept="image/*" multiple style={{display:'none'}}
+        onChange={(e)=>{ if (e.target.files?.length) window.alert(`Selected ${e.target.files.length} image(s) (demo).`); }}/>
+      <button type="button" onClick={()=>fileRef.current?.click()} style={{
+        flex:1,minHeight:220,borderRadius:20,border:'2px dashed #cbd5e1',background:'rgba(255,255,255,0.7)',
+        display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:12,cursor:'pointer',
+        marginBottom:16,
+      }}>
+        <div style={{
+          width:64,height:64,borderRadius:16,background:'#dbeafe',
+          display:'flex',alignItems:'center',justifyContent:'center',fontSize:32,color:importBlue,fontWeight:300,
+        }}>+</div>
+        <span style={{color:importMuted,fontSize:15,fontWeight:600}}>Tap to select from camera roll</span>
+      </button>
+      <div style={{
+        background:importOrangeBg,borderRadius:16,padding:16,marginBottom:20,
+        border:'1px solid rgba(234,88,12,0.15)',
+      }}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+          <span style={{
+            background:importOrangeBadge,color:'white',fontSize:10,fontWeight:900,
+            letterSpacing:1,padding:'4px 8px',borderRadius:6,
+          }}>TIPS</span>
+          <span style={{color:importOrangeText,fontSize:14,fontWeight:700}}>Works best with screenshots of</span>
+        </div>
+        <ul style={{margin:0,paddingLeft:20,color:importOrangeText,fontSize:14,fontWeight:600,lineHeight:1.7}}>
+          <li>Instagram saved posts</li>
+          <li>TikTok screenshots</li>
+          <li>Google Maps lists</li>
+        </ul>
+      </div>
+      <button type="button" onClick={()=>fileRef.current?.click()} style={{
+        width:'100%',padding:16,borderRadius:99,background:'#e2e8f0',color:importInk,
+        fontWeight:800,fontSize:16,border:'none',
+      }}>Choose Photos</button>
+    </div>
+  );
+}
+
+function ImportFromNotesFlow({ onBack }) {
+  const [notes, setNotes] = useState('');
+  const help = () => window.alert('Paste a plain list of places — we will parse them when the backend is connected.');
+  const pasteNotes = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) setNotes(t);
+    } catch (_) {}
+  };
+  const canImport = notes.trim().length > 0;
+
+  return (
+    <div style={{
+      height:'100%',display:'flex',flexDirection:'column',
+      background:'linear-gradient(180deg,#e8ecf2 0%,#f8fafc 100%)',
+      padding:'8px 18px 24px',overflowY:'auto',boxSizing:'border-box',
+    }}>
+      <div style={{width:40,height:4,borderRadius:99,background:'#cbd5e1',margin:'0 auto 12px'}}/>
+      <ImportHeader title="Import from Notes" onBack={onBack} onHelp={help}/>
+      <div style={{position:'relative',marginBottom:14}}>
+        <textarea
+          value={notes}
+          onChange={e=>setNotes(e.target.value)}
+          placeholder="Paste your notes here..."
+          style={{
+            width:'100%',minHeight:180,borderRadius:16,padding:'16px 16px 48px',
+            border:'1px solid #e2e8f0',fontSize:15,fontFamily:'inherit',color:importInk,
+            resize:'vertical',boxSizing:'border-box',background:'white',
+            outline:'none',boxShadow:'0 4px 20px rgba(15,23,42,0.05)',
+          }}
+        />
+        <button type="button" onClick={pasteNotes} style={{
+          position:'absolute',bottom:12,right:12,background:importBlue,color:'white',
+          fontWeight:800,fontSize:12,padding:'8px 14px',borderRadius:10,border:'none',
+        }}>Paste</button>
+      </div>
+      <div style={{
+        background:importOrangeBg,borderRadius:16,padding:16,marginBottom:20,
+        border:'1px solid rgba(234,88,12,0.15)',
+      }}>
+        <div style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:8,flexWrap:'wrap'}}>
+          <span style={{
+            background:importOrangeBadge,color:'white',fontSize:10,fontWeight:900,
+            letterSpacing:1,padding:'4px 8px',borderRadius:6,flexShrink:0,
+          }}>TIPS</span>
+          <span style={{color:importOrangeText,fontSize:14,fontWeight:700}}>Works best with lists like</span>
+        </div>
+        <ul style={{margin:0,paddingLeft:20,color:importOrangeText,fontSize:14,fontWeight:600,lineHeight:1.7}}>
+          <li>Eiffel Tower, Paris</li>
+          <li>Louvre Museum</li>
+          <li>Café de Flore</li>
+        </ul>
+      </div>
+      <button type="button" disabled={!canImport} onClick={()=>canImport && window.alert('Notes sent (demo).')} style={{
+        width:'100%',padding:16,borderRadius:99,fontWeight:800,fontSize:16,border:'none',
+        background:canImport?importBlue:'#e2e8f0',color:canImport?'white':importMuted,
+        cursor:canImport?'pointer':'default',display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+      }}>
+        <span style={{fontSize:18}}>✨</span> Import Notes
+      </button>
+    </div>
+  );
+}
+
 /* ─── ADD SPOTS SHEET ─── */
 function AddSpotsSheet({onClose}) {
+  const [importFlow, setImportFlow] = useState(null);
   const cardBase = {
     padding:'18px',borderRadius:18,textAlign:'left',cursor:'pointer',
     background:C.glass,border:`1px solid ${C.glassBd}`,transition:'all 0.25s',
@@ -746,6 +971,29 @@ function AddSpotsSheet({onClose}) {
   };
   const titleStyle = {color:'white',fontWeight:800,fontSize:15,marginBottom:4};
   const subStyle = {color:C.textSec,fontSize:12,lineHeight:1.4};
+
+  if (importFlow === 'link') {
+    return (
+      <div style={{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden',minHeight:0}}>
+        <ImportViaLinkFlow onBack={()=>setImportFlow(null)}/>
+      </div>
+    );
+  }
+  if (importFlow === 'screenshot') {
+    return (
+      <div style={{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden',minHeight:0}}>
+        <ImportViaScreenshotFlow onBack={()=>setImportFlow(null)}/>
+      </div>
+    );
+  }
+  if (importFlow === 'notes') {
+    return (
+      <div style={{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden',minHeight:0}}>
+        <ImportFromNotesFlow onBack={()=>setImportFlow(null)}/>
+      </div>
+    );
+  }
+
   return (
     <div style={{padding:'24px 20px',background:`linear-gradient(180deg,${C.navy},${C.deep})`,height:'100%',display:'flex',flexDirection:'column',overflowY:'auto'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:22}}>
@@ -756,7 +1004,7 @@ function AddSpotsSheet({onClose}) {
       </div>
       <MascotBubble mascot="coral" message="I know all the best spots! Where did you find yours? 🐠" style={{marginBottom:18}}/>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
-        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+        <button type="button" style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut} onClick={()=>setImportFlow('link')}>
           <div style={{display:'flex',alignItems:'center',marginBottom:14,height:40}}>
             <div style={{width:40,height:40,borderRadius:10,background:'#000',display:'flex',alignItems:'center',
               justifyContent:'center',position:'relative',zIndex:2,boxShadow:`0 0 0 1px ${C.glassBd}`}}>
@@ -779,7 +1027,7 @@ function AddSpotsSheet({onClose}) {
           <div style={titleStyle}>Social Search</div>
           <div style={subStyle}>Search TikTok &amp; Instagram in-app</div>
         </button>
-        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+        <button type="button" style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut} onClick={()=>setImportFlow('link')}>
           <div style={{width:40,height:40,borderRadius:10,background:'rgba(0,229,212,0.12)',
             border:`1px solid rgba(0,229,212,0.25)`,
             display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14}}>
@@ -791,7 +1039,7 @@ function AddSpotsSheet({onClose}) {
           <div style={titleStyle}>Paste any URL</div>
           <div style={subStyle}>Articles, blogs, TikTok, Instagram &amp; more</div>
         </button>
-        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+        <button type="button" style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut} onClick={()=>setImportFlow('notes')}>
           <div style={{width:40,height:40,borderRadius:10,background:'linear-gradient(135deg,#ffad4a,#ff8a3a)',
             display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14,
             boxShadow:'0 2px 12px rgba(255,138,58,0.35)'}}>
@@ -803,7 +1051,7 @@ function AddSpotsSheet({onClose}) {
           <div style={titleStyle}>Notes</div>
           <div style={subStyle}>Paste your list</div>
         </button>
-        <button style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>
+        <button type="button" style={cardBase} onMouseEnter={hoverIn} onMouseLeave={hoverOut} onClick={()=>setImportFlow('screenshot')}>
           <div style={{width:40,height:40,borderRadius:10,background:'linear-gradient(135deg,#60a5fa,#2aa3e0)',
             display:'flex',alignItems:'center',justifyContent:'center',marginBottom:14,
             boxShadow:'0 2px 12px rgba(42,163,224,0.35)'}}>
@@ -1109,16 +1357,103 @@ function TripsTab({trips, onPlan, onTripClick}) {
   );
 }
 
+/* ─── PROFILE MENU (Sign out / Delete account) ─── */
+const profileDanger = '#e85d6a';
+function IconSignOut({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+        stroke={profileDanger} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+function IconTrash({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+        stroke={profileDanger} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ProfileMenu({ onClose, onSignOut, onDeleteAccount }) {
+  return (
+    <div
+      role="menu"
+      style={{
+        position: 'absolute', top: 'calc(100% + 10px)', right: 0, zIndex: 40,
+        minWidth: 220,
+        background: '#ffffff',
+        border: '1px solid rgba(0,0,0,0.08)',
+        borderRadius: 18,
+        boxShadow: '0 12px 40px rgba(0,0,0,0.18)',
+        overflow: 'hidden',
+        padding: 6,
+      }}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => { onSignOut(); onClose(); }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 12, width: '100%',
+          padding: '12px 12px', border: 'none', borderRadius: 12, cursor: 'pointer',
+          background: 'transparent', fontFamily: 'inherit', fontSize: 15, fontWeight: 700,
+          color: profileDanger, textAlign: 'left',
+        }}
+      >
+        <span style={{
+          width: 40, height: 40, borderRadius: 12, background: '#eef0f3',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}><IconSignOut /></span>
+        Sign out
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => { if (onDeleteAccount() !== false) onClose(); }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 12, width: '100%',
+          padding: '12px 12px', border: 'none', borderRadius: 12, cursor: 'pointer',
+          background: 'transparent', fontFamily: 'inherit', fontSize: 15, fontWeight: 700,
+          color: profileDanger, textAlign: 'left',
+        }}
+      >
+        <span style={{
+          width: 40, height: 40, borderRadius: 12, background: '#eef0f3',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}><IconTrash /></span>
+        Delete Account
+      </button>
+    </div>
+  );
+}
+
 /* ─── MAIN APP ─── */
-function MainApp() {
+function MainApp({ onSignOut }) {
   const [tab, setTab] = useState('trips');
   const [panel, setPanel] = useState(null);
   const [actionOpen, setActionOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [trips, setTrips] = useState(TRIPS);
 
+  const profileWrapRef = useRef(null);
   const sharedMapRef = useRef(null);
   const tripMarkersRef = useRef([]);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const close = (e) => {
+      if (profileWrapRef.current && !profileWrapRef.current.contains(e.target)) setProfileOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [profileOpen]);
 
   const clearTripMarkers = () => {
     tripMarkersRef.current.forEach(m => m.setMap(null));
@@ -1187,6 +1522,16 @@ function MainApp() {
     }
   };
 
+  const handleDeleteAccount = () => {
+    if (!window.confirm('Delete your DeepDive account and local data? This cannot be undone.')) return false;
+    try {
+      localStorage.removeItem('dd_screen');
+      localStorage.removeItem('dd_onboard');
+    } catch (_) {}
+    if (typeof onSignOut === 'function') onSignOut({ deleteAccount: true });
+    return true;
+  };
+
   return (
     <div style={{width:'100%',height:'100%',display:'flex',flexDirection:'column',position:'relative',overflow:'hidden'}}>
       {/* TOP NAV */}
@@ -1214,8 +1559,26 @@ function MainApp() {
               background:'#ff6e7a',display:'flex',alignItems:'center',justifyContent:'center',
               fontSize:9,fontWeight:900,color:'white',boxShadow:'0 0 8px rgba(255,110,122,0.6)'}}>5</div>
           </div>
-          <div style={{width:36,height:36,borderRadius:'50%',background:C.glassBr,border:`1px solid ${C.glassBd}`,
-            display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,cursor:'pointer'}}>👤</div>
+          <div ref={profileWrapRef} style={{position:'relative'}}>
+            <button
+              type="button"
+              aria-expanded={profileOpen}
+              aria-haspopup="menu"
+              onClick={() => setProfileOpen(v => !v)}
+              style={{
+                width:36,height:36,borderRadius:'50%',background:C.glassBr,border:`1px solid ${C.glassBd}`,
+                display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,cursor:'pointer',
+                padding:0,
+              }}
+            >👤</button>
+            {profileOpen && (
+              <ProfileMenu
+                onClose={() => setProfileOpen(false)}
+                onSignOut={() => { if (typeof onSignOut === 'function') onSignOut({ deleteAccount: false }); }}
+                onDeleteAccount={handleDeleteAccount}
+              />
+            )}
+          </div>
         </div>
       </div>
 
@@ -1280,8 +1643,19 @@ function MainApp() {
   );
 }
 
+/* ─── AUTH (local demo — replace with real API) ─── */
+function loadAccounts() {
+  try { return JSON.parse(localStorage.getItem('dd_accounts') || '{}'); } catch (_) { return {}; }
+}
+function saveAccounts(acc) {
+  localStorage.setItem('dd_accounts', JSON.stringify(acc));
+}
+function clearSession() {
+  try { localStorage.removeItem('dd_session'); } catch (_) {}
+}
+
 /* ─── SPLASH SCREEN ─── */
-function SplashScreen({onStart}) {
+function SplashScreen({onStart, onSignUp, onSignIn}) {
   return (
     <div style={{height:'100%',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
       background:'radial-gradient(ellipse at 50% 30%, #0d2a50 0%, #060e1c 50%, #04080f 100%)',
@@ -1309,7 +1683,13 @@ function SplashScreen({onStart}) {
           border:'none',boxShadow:'0 0 40px rgba(0,229,212,0.4)',letterSpacing:'-0.5px'}}>
           Get Started 🌊
         </button>
-        <button style={{
+        <button type="button" onClick={onSignUp} style={{
+          padding:'14px',borderRadius:18,fontSize:15,fontWeight:700,cursor:'pointer',
+          background:'rgba(255,255,255,0.08)',color:'white',
+          border:`1px solid ${C.glassBd}`}}>
+          Create account
+        </button>
+        <button type="button" onClick={onSignIn} style={{
           padding:'14px',borderRadius:18,fontSize:15,fontWeight:700,cursor:'pointer',
           background:'rgba(255,255,255,0.06)',color:C.textSec,
           border:`1px solid ${C.glassBd}`}}>
@@ -1321,6 +1701,201 @@ function SplashScreen({onStart}) {
         <div style={{textAlign:'center'}}><CoralFish size={56}/><div style={{color:C.textMut,fontSize:11,marginTop:4}}>Coral</div></div>
         <div style={{textAlign:'center'}}><PearlPuffer size={56}/><div style={{color:C.textMut,fontSize:11,marginTop:4}}>Pearl</div></div>
         <div style={{textAlign:'center'}}><SeahorseGuide size={42}/><div style={{color:C.textMut,fontSize:11,marginTop:4}}>Shelby</div></div>
+      </div>
+      <style>{`
+        @keyframes float0{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+        @keyframes float1{0%,100%{transform:translateY(0)}50%{transform:translateY(-16px)}}
+        @keyframes float2{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+        @keyframes float3{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
+      `}</style>
+    </div>
+  );
+}
+
+function AuthBackdrop() {
+  return (
+    <>
+      {Array.from({length:18}).map((_,i)=>(
+        <div key={i} style={{position:'absolute',
+          left:`${(i*53)%100}%`,top:`${(i*37)%100}%`,
+          width:3+((i*7)%4),height:3+((i*7)%4),borderRadius:'50%',
+          background:`rgba(0,229,212,${0.15+((i%5)*0.08)})`,
+          boxShadow:'0 0 8px rgba(0,229,212,0.5)',
+          animation:`float${i%4} ${3.2+(i%5)*0.6}s ease-in-out infinite`,
+          animationDelay:`${(i%7)*0.3}s`}}/>
+      ))}
+    </>
+  );
+}
+
+const inputAuth = {
+  width:'100%',padding:'14px 16px',borderRadius:14,fontSize:15,fontWeight:600,
+  background:'rgba(255,255,255,0.06)',border:`1px solid ${C.glassBd}`,color:'white',
+  outline:'none',boxSizing:'border-box',
+};
+const labelAuth = { color:C.textSec,fontSize:12,fontWeight:700,marginBottom:8,display:'block' };
+
+/* ─── SIGN UP ─── */
+function SignUpScreen({ onBack, onSuccess, onSignIn }) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [terms, setTerms] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = (e) => {
+    e.preventDefault();
+    setError('');
+    const em = email.trim().toLowerCase();
+    if (!em) { setError('Email is required.'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) { setError('Enter a valid email address.'); return; }
+    if (password.length < 8) { setError('Password must be at least 8 characters.'); return; }
+    if (password !== confirm) { setError('Passwords do not match.'); return; }
+    if (!terms) { setError('Please accept the terms to continue.'); return; }
+    const accounts = loadAccounts();
+    if (accounts[em]) { setError('An account with this email already exists. Sign in instead.'); return; }
+    accounts[em] = { name: name.trim(), password };
+    saveAccounts(accounts);
+    const display = name.trim() || em.split('@')[0];
+    localStorage.setItem('dd_session', JSON.stringify({ email: em, name: display }));
+    onSuccess();
+  };
+
+  return (
+    <div style={{height:'100%',display:'flex',flexDirection:'column',
+      background:'radial-gradient(ellipse at 50% 20%, #0d2a50 0%, #060e1c 55%, #04080f 100%)',
+      position:'relative',overflow:'hidden',overflowY:'auto'}}>
+      <AuthBackdrop/>
+      <div style={{position:'relative',zIndex:1,padding:'20px 24px 32px',maxWidth:400,margin:'0 auto',width:'100%'}}>
+        <button type="button" onClick={onBack} style={{
+          color:C.textSec,fontSize:14,fontWeight:700,marginBottom:20,cursor:'pointer',
+          background:'none',border:'none',padding:0,
+        }}>← Back</button>
+        <MascotBubble mascot="ollie" message="Join the crew — your reefs are waiting! 🐙" style={{marginBottom:20}}/>
+        <h1 style={{color:'white',fontSize:28,fontWeight:900,marginBottom:6,letterSpacing:'-0.5px'}}>Create account</h1>
+        <p style={{color:C.textSec,fontSize:14,marginBottom:24,lineHeight:1.5}}>Save trips and sync your dives when you connect a backend.</p>
+        <form onSubmit={submit}>
+          <div style={{marginBottom:16}}>
+            <label style={labelAuth}>Display name <span style={{fontWeight:600,opacity:0.7}}>(optional)</span></label>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Captain Nemo"
+              autoComplete="name" style={inputAuth}/>
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={labelAuth}>Email</label>
+            <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"
+              type="email" autoComplete="email" style={inputAuth}/>
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={labelAuth}>Password</label>
+            <input value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters"
+              type="password" autoComplete="new-password" style={inputAuth}/>
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={labelAuth}>Confirm password</label>
+            <input value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="Repeat password"
+              type="password" autoComplete="new-password" style={inputAuth}/>
+          </div>
+          <label style={{display:'flex',alignItems:'flex-start',gap:12,cursor:'pointer',marginBottom:20}}>
+            <input type="checkbox" checked={terms} onChange={e=>setTerms(e.target.checked)}
+              style={{width:20,height:20,marginTop:2,accentColor:C.biolume,flexShrink:0}}/>
+            <span style={{color:C.textSec,fontSize:13,lineHeight:1.45}}>
+              I agree to the <span style={{color:C.biolume,fontWeight:700}}>Terms</span> and{' '}
+              <span style={{color:C.biolume,fontWeight:700}}>Privacy Policy</span> (demo copy).
+            </span>
+          </label>
+          {error && (
+            <div role="alert" style={{
+              marginBottom:16,padding:'12px 14px',borderRadius:12,
+              background:'rgba(255,110,122,0.12)',border:`1px solid rgba(255,110,122,0.35)`,
+              color:'#ffb3bc',fontSize:13,fontWeight:600,
+            }}>{error}</div>
+          )}
+          <button type="submit" style={{
+            width:'100%',padding:'16px',borderRadius:16,fontSize:16,fontWeight:800,cursor:'pointer',
+            background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
+            border:'none',boxShadow:'0 0 30px rgba(0,229,212,0.35)',
+          }}>Create account</button>
+        </form>
+        <p style={{textAlign:'center',marginTop:20,color:C.textSec,fontSize:14}}>
+          Already have an account?{' '}
+          <button type="button" onClick={onSignIn} style={{
+            background:'none',border:'none',color:C.biolume,fontWeight:800,cursor:'pointer',padding:0,
+          }}>Sign in</button>
+        </p>
+      </div>
+      <style>{`
+        @keyframes float0{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+        @keyframes float1{0%,100%{transform:translateY(0)}50%{transform:translateY(-16px)}}
+        @keyframes float2{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+        @keyframes float3{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
+      `}</style>
+    </div>
+  );
+}
+
+/* ─── SIGN IN ─── */
+function SignInScreen({ onBack, onSuccess, onGoSignUp }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const submit = (e) => {
+    e.preventDefault();
+    setError('');
+    const em = email.trim().toLowerCase();
+    if (!em || !password) { setError('Enter email and password.'); return; }
+    const accounts = loadAccounts();
+    const acc = accounts[em];
+    if (!acc || acc.password !== password) { setError('Invalid email or password.'); return; }
+    const display = acc.name || em.split('@')[0];
+    localStorage.setItem('dd_session', JSON.stringify({ email: em, name: display }));
+    onSuccess();
+  };
+
+  return (
+    <div style={{height:'100%',display:'flex',flexDirection:'column',
+      background:'radial-gradient(ellipse at 50% 20%, #0d2a50 0%, #060e1c 55%, #04080f 100%)',
+      position:'relative',overflow:'hidden',overflowY:'auto'}}>
+      <AuthBackdrop/>
+      <div style={{position:'relative',zIndex:1,padding:'20px 24px 32px',maxWidth:400,margin:'0 auto',width:'100%'}}>
+        <button type="button" onClick={onBack} style={{
+          color:C.textSec,fontSize:14,fontWeight:700,marginBottom:20,cursor:'pointer',
+          background:'none',border:'none',padding:0,
+        }}>← Back</button>
+        <div style={{marginBottom:20}}><FinnShark size={72}/></div>
+        <h1 style={{color:'white',fontSize:28,fontWeight:900,marginBottom:6,letterSpacing:'-0.5px'}}>Welcome back</h1>
+        <p style={{color:C.textSec,fontSize:14,marginBottom:24}}>Sign in to pick up where you left off.</p>
+        <form onSubmit={submit}>
+          <div style={{marginBottom:16}}>
+            <label style={labelAuth}>Email</label>
+            <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"
+              type="email" autoComplete="email" style={inputAuth}/>
+          </div>
+          <div style={{marginBottom:20}}>
+            <label style={labelAuth}>Password</label>
+            <input value={password} onChange={e=>setPassword(e.target.value)} placeholder="Your password"
+              type="password" autoComplete="current-password" style={inputAuth}/>
+          </div>
+          {error && (
+            <div role="alert" style={{
+              marginBottom:16,padding:'12px 14px',borderRadius:12,
+              background:'rgba(255,110,122,0.12)',border:`1px solid rgba(255,110,122,0.35)`,
+              color:'#ffb3bc',fontSize:13,fontWeight:600,
+            }}>{error}</div>
+          )}
+          <button type="submit" style={{
+            width:'100%',padding:'16px',borderRadius:16,fontSize:16,fontWeight:800,cursor:'pointer',
+            background:`linear-gradient(135deg,${C.biolume},#00a0e9)`,color:C.deep,
+            border:'none',boxShadow:'0 0 30px rgba(0,229,212,0.35)',
+          }}>Sign In</button>
+        </form>
+        <p style={{textAlign:'center',marginTop:20,color:C.textSec,fontSize:14}}>
+          New here?{' '}
+          <button type="button" onClick={onGoSignUp} style={{
+            background:'none',border:'none',color:C.biolume,fontWeight:800,cursor:'pointer',padding:0,
+          }}>Create an account</button>
+        </p>
       </div>
       <style>{`
         @keyframes float0{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
@@ -1398,11 +1973,53 @@ function App() {
 
   return (
     <div style={{width:'100vw',height:'100vh',overflow:'hidden',position:'relative'}}>
-      {screen==='splash' && <SplashScreen onStart={()=>goOnboard(1)}/>}
+      {screen==='splash' && (
+        <SplashScreen
+          onStart={()=>goOnboard(1)}
+          onSignUp={()=>setScreen('signup')}
+          onSignIn={()=>setScreen('signin')}
+        />
+      )}
+      {screen==='signup' && (
+        <SignUpScreen
+          onBack={()=>setScreen('splash')}
+          onSignIn={()=>setScreen('signin')}
+          onSuccess={()=>goOnboard(1)}
+        />
+      )}
+      {screen==='signin' && (
+        <SignInScreen
+          onBack={()=>setScreen('splash')}
+          onGoSignUp={()=>setScreen('signup')}
+          onSuccess={()=>setScreen('app')}
+        />
+      )}
       {screen==='onboard' && onboardStep===1 && <OnboardAgeScreen onNext={()=>setOnboardStep(2)} onBack={()=>setScreen('splash')}/>}
       {screen==='onboard' && onboardStep===2 && <OnboardTripScreen onNext={()=>setOnboardStep(3)} onBack={()=>setOnboardStep(1)}/>}
       {screen==='onboard' && onboardStep===3 && <OnboardStyleScreen onNext={()=>setScreen('app')} onBack={()=>setOnboardStep(2)}/>}
-      {screen==='app' && <MainApp/>}
+      {screen==='app' && (
+        <MainApp onSignOut={(opts) => {
+          try {
+            if (opts?.deleteAccount) {
+              try {
+                const s = JSON.parse(localStorage.getItem('dd_session') || 'null');
+                if (s?.email) {
+                  const accounts = loadAccounts();
+                  delete accounts[s.email];
+                  saveAccounts(accounts);
+                }
+              } catch (_) {}
+              localStorage.removeItem('dd_session');
+              localStorage.removeItem('dd_screen');
+              localStorage.removeItem('dd_onboard');
+            } else {
+              clearSession();
+              localStorage.setItem('dd_screen', 'splash');
+            }
+          } catch (_) {}
+          setScreen('splash');
+        }}/>
+      )}
       {tweaksVisible && <TweaksPanel tweaks={tweaks} onChange={handleTweakChange} onClose={()=>setTweaksVisible(false)}/>}
     </div>
   );
